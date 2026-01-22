@@ -2,92 +2,100 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from dataclasses import dataclass
 
 # Configurazione Pagina
-st.set_page_config(page_title="Business Case DC30 kW Palermo", layout="wide")
+st.set_page_config(page_title="Simulatore Business Case DC30", layout="wide")
 
-st.title("⚡ Business Case: Stazione di Ricarica DC 30 kW")
-st.sidebar.header("Parametri di Input")
+st.title("⚡ Business Case Interattivo: Ricarica DC 30 kW")
+st.markdown("Analisi della redditività per stazione di servizio a Palermo (2026-2030)")
 
-# -----------------------------
-# 1) INPUT NELLA SIDEBAR
-# -----------------------------
-target_utilization = st.sidebar.slider("Utilizzo Target (%)", 5, 50, 30) / 100
-price_kwh = st.sidebar.number_input("Prezzo vendita (€/kWh)", value=0.69)
-cost_kwh = st.sidebar.number_input("Costo energia (€/kWh)", value=0.30)
-opex_unit = st.sidebar.number_input("OPEX annuo per colonnina (€)", value=2000)
+# ---------------------------------------------------------
+# 1) SIDEBAR: PARAMETRI MODIFICABILI (SENSITIVITÀ)
+# ---------------------------------------------------------
+st.sidebar.header("🕹️ Parametri di Simulazione")
 
-@dataclass
-class Inputs:
-    years = np.array([2026, 2027, 2028, 2029, 2030])
-    bev = np.array([2600, 3000, 3500, 4200, 5000])
-    station_share = np.array([0.02, 0.03, 0.04, 0.045, 0.05])
-    consumption_kwh_per_bev_year: float = 3000
-    public_share: float = 0.30
-    avg_session_kwh: float = 35
-    charger_power_kw: float = 30
-    uptime: float = 0.97
-    target_utilization: float = target_utilization
-    price_eur_per_kwh: float = price_kwh
-    cogs_eur_per_kwh: float = cost_kwh
-    opex_eur_per_charger_year: float = opex_unit
-    capex_sensitivity: tuple = (20000, 25000, 30000)
+# Parametri Mercato
+st.sidebar.subheader("Mercato e Domanda")
+utilizzazione_target = st.sidebar.slider("Utilizzo medio annuo (%)", 10, 50, 30) / 100 # [cite: 186]
+quota_pubblico = st.sidebar.slider("Quota ricarica pubblica (%)", 10, 50, 30) / 100 # [cite: 181]
 
-inputs = Inputs()
+# Parametri Economici
+st.sidebar.subheader("Economia (Unitario)")
+prezzo_vendita = st.sidebar.number_input("Prezzo vendita (€/kWh)", value=0.69, step=0.01) # [cite: 187]
+costo_energia = st.sidebar.number_input("Costo energia (€/kWh)", value=0.30, step=0.01) # [cite: 188]
+capex_per_colonnina = st.sidebar.slider("CAPEX per unità (€)", 15000, 35000, 25000, step=1000) # [cite: 161, 163]
+opex_annuo = st.sidebar.number_input("OPEX annuo per unità (€)", value=2000) # [cite: 162, 189]
 
-# -----------------------------
-# 2) CALCOLI
-# -----------------------------
-cap_per_charger = inputs.charger_power_kw * 8760 * inputs.uptime * inputs.target_utilization
-city_public_energy = inputs.bev * inputs.consumption_kwh_per_bev_year * inputs.public_share
-captured_kwh = city_public_energy * inputs.station_share
-sessions_day = (captured_kwh / inputs.avg_session_kwh) / 365
-chargers_needed = np.ceil(captured_kwh / cap_per_charger).astype(int)
+# ---------------------------------------------------------
+# 2) LOGICA DI CALCOLO (Basata su Report)
+# ---------------------------------------------------------
+years = np.array([2026, 2027, 2028, 2029, 2030])
+bev_palermo = np.array([2600, 3000, 3500, 4200, 5000]) # [cite: 179]
+quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) # 
 
-revenue = captured_kwh * inputs.price_eur_per_kwh
-ebitda = (captured_kwh * (inputs.price_eur_per_kwh - inputs.cogs_eur_per_kwh)) - (chargers_needed * inputs.opex_eur_per_charger_year)
+# Capacità tecnica [cite: 190]
+capacita_unitaria = 30 * 8760 * 0.97 * utilizzazione_target
 
-# -----------------------------
-# 3) UI STREAMLIT
-# -----------------------------
-col1, col2, col3 = st.columns(3)
-col1.metric("Capacità/Colonnina", f"{int(cap_per_charger)} kWh/y")
-col2.metric("Energia Totale 2030", f"{int(captured_kwh[-1])} kWh")
-col3.metric("Max Colonnine", f"{chargers_needed[-1]}")
+# Calcolo Domanda e Dimensionamento [cite: 204, 205, 206]
+energia_intercettata = bev_palermo * 3000 * quota_pubblico * quota_stazione
+colonnine_necessarie = np.ceil(energia_intercettata / capacita_unitaria).astype(int)
 
-st.subheader("📊 Tabella di Riepilogo")
-df = pd.DataFrame({
-    "Anno": inputs.years,
-    "BEV Palermo": inputs.bev,
-    "Energia (kWh)": captured_kwh.astype(int),
-    "Sessioni/Giorno": sessions_day.round(1),
-    "N. Colonnine": chargers_needed,
-    "EBITDA (€)": ebitda.astype(int)
+# Calcolo Economico [cite: 233, 234]
+ricavi = energia_intercettata * prezzo_vendita
+margine_energia = energia_intercettata * (prezzo_vendita - costo_energia)
+ebitda = margine_energia - (colonnine_necessarie * opex_annuo)
+
+# Cash Flow [cite: 260, 262]
+capex_anno = np.zeros(len(years))
+prev_n = 0
+for i, n in enumerate(colonnine_necessarie):
+    nuove = max(0, n - prev_n)
+    capex_anno[i] = nuove * capex_per_colonnina
+    prev_n = n
+
+cf_netto = ebitda - capex_anno
+cf_cumulato = np.cumsum(cf_netto)
+
+# ---------------------------------------------------------
+# 3) VISUALIZZAZIONE RISULTATI
+# ---------------------------------------------------------
+
+# KPI Principali
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("EBITDA 2030", f"€ {ebitda[-1]:,.0f}")
+k2.metric("CAPEX Totale", f"€ {np.sum(capex_anno):,.0f}")
+k3.metric("CF Cumulato 2030", f"€ {cf_cumulato[-1]:,.0f}")
+payback_year = years[np.where(cf_cumulato >= 0)[0][0]] if any(cf_cumulato >= 0) else "Oltre 2030"
+k4.metric("Anno di Payback", payback_year)
+
+# Tabelle
+st.subheader("📋 Dettaglio Annuale")
+df_output = pd.DataFrame({
+    "Anno": years,
+    "Energia (kWh)": energia_intercettata.astype(int),
+    "N. Colonnine": colonnine_necessarie,
+    "Ricavi (€)": ricavi.astype(int),
+    "EBITDA (€)": ebitda.astype(int),
+    "CF Cumulato (€)": cf_cumulato.astype(int)
 })
-st.dataframe(df, use_container_width=True)
+st.dataframe(df_output, use_container_width=True)
 
-st.subheader("📈 Analisi Grafica")
-fig, ax1 = plt.subplots(figsize=(10, 4))
-ax1.bar(inputs.years, ebitda, color='skyblue', label='EBITDA')
-ax1.set_ylabel("EBITDA (€)")
-ax2 = ax1.twinx()
-ax2.plot(inputs.years, chargers_needed, color='red', marker='o', label='N. Colonnine')
-ax2.set_ylabel("Numero Colonnine")
+# Grafici
+st.subheader("📈 Analisi dei Trend")
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+# Grafico Energia e EBITDA
+ax1.plot(years, energia_intercettata/1000, marker='o', label="MWh/anno")
+ax1.bar(years, ebitda/1000, alpha=0.3, color='green', label="EBITDA (k€)")
+ax1.set_title("Energia Intercettata vs EBITDA")
+ax1.legend()
+ax1.grid(True, alpha=0.3)
+
+# Grafico Cash Flow
+ax2.plot(years, cf_cumulato/1000, marker='s', color='orange', label="CF Cumulato (k€)")
+ax2.axhline(0, color='black', linewidth=1)
+ax2.set_title("Evoluzione Ritorno Economico")
+ax2.legend()
+ax2.grid(True, alpha=0.3)
+
 st.pyplot(fig)
-
-# Sensitività CAPEX
-st.subheader("💰 Sensitività CAPEX e Payback")
-sens_rows = []
-for cap in inputs.capex_sensitivity:
-    capex_ann = np.zeros_like(inputs.years, dtype=float)
-    prev = 0
-    for t, n in enumerate(chargers_needed):
-        capex_ann[t] = max(0, n - prev) * cap
-        prev = n
-    cf_cum = np.cumsum(ebitda - capex_ann)
-    idx = np.where(cf_cum >= 0)[0]
-    pb = str(inputs.years[idx[0]]) if len(idx) > 0 else "> 2030"
-    sens_rows.append({"CAPEX Unitario (€)": cap, "Cash Flow 2030 (€)": int(cf_cum[-1]), "Payback": pb})
-
-st.table(pd.DataFrame(sens_rows))
