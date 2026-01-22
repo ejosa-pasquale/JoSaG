@@ -6,15 +6,15 @@ import numpy_financial as npf
 
 st.set_page_config(page_title="Executive Charging Suite", layout="wide")
 
-st.title("🛡️ Executive Support System: Ricarica DC Palermo")
-st.markdown("Analisi completa 2026-2030: Strategia Multisito, Capacità Tecnica e Redditività.")
+st.title("🛡️ eVFS for EOS")
+st.markdown("Investment Readiness Tool: Trasformare i dati del parco auto in decisioni infrastrutturate bancabili")
 
 # --- SIDEBAR: TUTTE LE VARIABILI DECISIONALI (GM & CFO) ---
 st.sidebar.header("🕹️ Leve Decisionali (Il tuo controllo)")
 with st.sidebar.expander("📍 Configurazione Rete", expanded=True):
-    tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"], help="La 60 kW dimezza i tempi di ricarica ma costa di più.")
+    tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"])
     allocazione = st.radio("Strategia di espansione", ["Monosito (Tutto in A)", "Multisito (Espansione in B)"])
-    ore_max_giorno = st.slider("Disponibilità operativa (ore/giorno)", 4, 12, 10, help="Tempo massimo di occupazione fisica della piazzola.")
+    ore_max_giorno = st.slider("Disponibilità operativa (ore/giorno)", 4, 12, 10)
 
 with st.sidebar.expander("💰 Parametri Finanziari"):
     prezzo_kwh = st.number_input("Prezzo vendita (€/kWh)", value=0.69)
@@ -23,31 +23,28 @@ with st.sidebar.expander("💰 Parametri Finanziari"):
     capex_60 = st.number_input("CAPEX unità 60kW (€)", value=45000)
     wacc = st.slider("Costo del Capitale (WACC %)", 4, 12, 8) / 100
 
-st.sidebar.header("📊 Ipotesi di Mercato (Rischi)")
+st.sidebar.header("📊 Ipotesi di Scenario (Rischi)")
 with st.sidebar.expander("🌍 Scenario Palermo"):
     stress_bev = st.slider("Stress Test Parco BEV (%)", 50, 150, 100) / 100
     public_share = st.slider("Quota Ricarica Pubblica (%)", 10, 50, 30) / 100
     carica_media_anno = st.number_input("Carica Media/Auto (kWh/y)", value=3000)
     stress_cattura = st.slider("Efficacia Cattura (%)", 50, 150, 100) / 100
 
-# --- LOGICA DI CALCOLO UNIFICATA ---
+# --- LOGICA DI CALCOLO ---
 years = np.array([2026, 2027, 2028, 2029, 2030])
 potenza_kw = 30 if tecnologia == "DC 30 kW" else 60
 capex_unit = capex_30 if tecnologia == "DC 30 kW" else capex_60
 opex_unit = 2000 if tecnologia == "DC 30 kW" else 3500
 
-# 1. Mercato e Domanda
 bev_citta = np.array([2600, 3000, 3500, 4200, 5000]) * stress_bev
 quota_mercato = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) * stress_cattura
 auto_clienti = bev_citta * public_share * quota_mercato
 energia_kwh = auto_clienti * carica_media_anno
 
-# 2. Capacità e Dimensionamento
 ore_richieste = energia_kwh / potenza_kw
 ore_disp_asset = ore_max_giorno * 365
 n_totale = np.ceil(ore_richieste / ore_disp_asset).astype(int)
 
-# 3. Allocazione Location
 stazione_A = np.ones(len(years))
 stazione_B = np.zeros(len(years))
 for i, n in enumerate(n_totale):
@@ -57,7 +54,6 @@ for i, n in enumerate(n_totale):
     else:
         stazione_A[i] = n
 
-# 4. Finanza
 ricavi = energia_kwh * prezzo_kwh
 ebitda = (energia_kwh * (prezzo_kwh - costo_kwh)) - (n_totale * opex_unit)
 capex_flow = np.zeros(len(years)); prev_n = 0
@@ -75,9 +71,8 @@ k2.metric("TIR (IRR)", f"{(npf.irr(cf_netto)*100):.1f}%")
 k3.metric("Asset Totali 2030", f"{n_totale[-1]}")
 k4.metric("Saturazione 2030", f"{(ore_richieste[-1]/(n_totale[-1]*ore_disp_asset)*100):.1f}%")
 
-# --- TUTTI I GRAFICI RICHIESTI ---
+# --- GRAFICI E SPIEGAZIONI ---
 st.divider()
-st.subheader("📊 Intelligence Visuale")
 c1, c2 = st.columns(2)
 
 with c1:
@@ -90,6 +85,10 @@ with c1:
     ax1.axhline(0, color='red', linestyle='--')
     ax1.set_xlabel("Ricariche giornaliere per unità")
     st.pyplot(fig1)
+    st.markdown(r"""
+    **Formula Break-even (Giorno):** $N_{auto} = \frac{OPEX_{day} + \frac{CAPEX}{5 \cdot 365}}{35 \cdot (P_{vendita} - C_{energia})}$  
+    *Spiegazione:* Il grafico mostra il punto in cui l'utile giornaliero copre sia i costi operativi (OPEX) che l'ammortamento della colonnina. Se il numero di auto al giorno è inferiore al punto di incrocio, l'asset lavora in perdita.
+    """)
 
 with c2:
     st.write("**2. Cash Flow Cumulato (Recupero)**")
@@ -98,6 +97,10 @@ with c2:
     ax2.fill_between(years, cf_cum, 0, where=(cf_cum >= 0), color='green', alpha=0.1)
     ax2.axhline(0, color='black', linewidth=1)
     st.pyplot(fig2)
+    st.markdown(r"""
+    **Formula Flusso di Cassa Cumulato:** $CF_{cum, t} = \sum_{i=2026}^{t} (EBITDA_i - CAPEX_i)$  
+    *Spiegazione:* Rappresenta la liquidità netta in cassa anno dopo anno. Il punto in cui la curva attraversa lo zero indica il **Payback Period**, ovvero il momento in cui l'investimento iniziale è stato completamente recuperato dai profitti.
+    """)
 
 c3, c4 = st.columns(2)
 with c3:
@@ -108,6 +111,10 @@ with c3:
     ax3.set_ylabel("Numero Colonnine")
     ax3.legend()
     st.pyplot(fig3)
+    st.markdown(r"""
+    **Formula Saturazione Oraria:** $Sat\% = \frac{\sum E_{kwh} / Potenza_{kw}}{N_{colonnine} \cdot Ore_{operative} \cdot 365}$  
+    *Spiegazione:* Questo grafico gestisce la capacità fisica. Quando la ricarica dei clienti richiede più ore di quelle disponibili in una singola stazione, il sistema alloca un nuovo asset. Nella strategia Multisito, l'eccedenza viene spostata nella Location B.
+    """)
 
 with c4:
     st.write("**4. Struttura dei Margini (Totale 5 Anni)**")
@@ -116,6 +123,10 @@ with c4:
     vals = [ricavi.sum(), (energia_kwh * costo_kwh).sum(), capex_flow.sum(), ebitda.sum()]
     ax4.bar(labels, vals, color=['#2ecc71', '#e67e22', '#e74c3c', '#3498db'])
     st.pyplot(fig4)
+    st.markdown(r"""
+    **Formula EBITDA:** $EBITDA = (E_{kwh} \cdot (P_{vendita} - C_{energia})) - OPEX_{tot}$  
+    *Spiegazione:* Il grafico a barre confronta i volumi monetari totali. Permette al CFO di visualizzare immediatamente l'incidenza della materia prima (Energia) e dell'investimento fisso (CAPEX) rispetto alla creazione di valore lordo (EBITDA).
+    """)
 
 # --- TABELLA ANALITICA COMPLETA ---
 st.divider()
@@ -132,10 +143,3 @@ df_master = pd.DataFrame({
     "CF Cumulato (€)": cf_cum.astype(int)
 }).set_index("Anno")
 st.table(df_master)
-
-with st.expander("🔍 Intelligence Report - Guida alla Decisione"):
-    st.markdown(f"""
-    - **Capacità Fisica**: Con la scelta **{tecnologia}**, ogni auto richiede **{35/potenza_kw*60:.0f} minuti** per una ricarica media. 
-    - **Soglia Multisito**: Se hai scelto 'Multisito', il sistema sposta l'investimento sulla Stazione B non appena la Stazione A supera le **{ore_max_giorno} ore** di occupazione.
-    - **Stress Test**: Il VAN di **€ {npf.npv(wacc, cf_netto):,.0f}** è la tua garanzia di sicurezza. Se resta positivo anche abbassando il 'Parco BEV', l'investimento è solido.
-    """)
