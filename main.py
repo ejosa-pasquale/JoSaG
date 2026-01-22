@@ -6,7 +6,7 @@ import numpy_financial as npf
 
 st.set_page_config(page_title="Executive Charging Suite", layout="wide")
 
-st.title("🛡️ eVFS for EOS")
+st.title("🛡️ eVFs for EOS")
 st.markdown("Investment Readiness Tool: Trasformare i dati del parco auto in decisioni infrastrutturate bancabili")
 
 # --- SIDEBAR: TUTTE LE VARIABILI DECISIONALI (GM & CFO) ---
