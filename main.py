@@ -4,121 +4,117 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy_financial as npf
 
-st.set_page_config(page_title="Investment Tool Pro", layout="wide")
+st.set_page_config(page_title="Investment Decision Tool DC30", layout="wide")
+
+st.title("🛡️ Sistema di Supporto alle Decisioni - DC30 Palermo")
+st.markdown("Questo tool valuta la robustezza del Business Case al variare delle condizioni esterne e delle tue scelte commerciali.")
 
 # ---------------------------------------------------------
-# CSS PER UI PROFESSIONALE
+# SIDEBAR - INPUT DIVISI PER TIPOLOGIA
 # ---------------------------------------------------------
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    </style>
-    """, unsafe_allow_html=True)
-
-st.title("🏛️ Decision Support System: DC 30 kW Palermo")
-st.info("Modello basato su report ufficiale del 22/01/2026. Include Stress Test, Analisi Fiscale e VAN.")
-
-# ---------------------------------------------------------
-# SIDEBAR - PARAMETRI AVANZATI
-# ---------------------------------------------------------
-st.sidebar.header("⚙️ Configurazione Avanzata")
-
-with st.sidebar.expander("🛡️ Scenario Stress Test", expanded=True):
-    stress_auto = st.slider("Moltiplicatore Parco BEV", 0.5, 1.5, 1.0)
-    stress_competizione = st.slider("Efficacia Cattura (%)", 50, 150, 100) / 100
-
-with st.sidebar.expander("💸 Parametri Finanziari & Fiscali"):
+st.sidebar.header("🎯 Variabili Decisionali (Le tue scelte)")
+with st.sidebar:
+    prezzo_kwh = st.number_input("Prezzo di Vendita (€/kWh)", value=0.69, help="Il prezzo che imponi ai tuoi clienti.")
+    opex_target = st.number_input("OPEX annuo/colonnina (€)", value=2000, help="Costi di manutenzione e gestione.")
+    capex_unit = st.slider("Investimento per Colonnina (€)", 15000, 35000, 25000)
     wacc = st.slider("Costo del Capitale (WACC %)", 4, 12, 8) / 100
-    tax_rate = st.slider("Aliquota Fiscale (IRES/IRAP %)", 20, 30, 24) / 100
-    prezzo_kwh = st.sidebar.number_input("Prezzo vendita (€/kWh)", value=0.69)
-    costo_kwh = st.sidebar.number_input("Costo energia (€/kWh)", value=0.30)
-    capex_unit = st.sidebar.number_input("CAPEX per Unità (€)", value=25000)
+
+st.sidebar.header("📊 Ipotesi di Mercato (Scenario)")
+with st.sidebar:
+    crescita_bev = st.slider("Moltiplicatore Adozione Auto Elettriche", 0.5, 2.0, 1.0, help="1.0 = Scenario Report. 0.5 = Rallentamento mercato. 2.0 = Boom elettrico.")
+    efficacia_stazione = st.slider("Capacità di Cattura (%)", 50, 150, 100, help="Capacità della stazione di attrarre clienti rispetto alla concorrenza.") / 100
+    carica_media = st.number_input("Energia media caricata/anno (kWh)", value=3000, help="Quanti kWh consuma mediamente un'auto del parco circolante in un anno.")
 
 # ---------------------------------------------------------
-# LOGICA DI CALCOLO COMPLETA
+# LOGICA DI CALCOLO
 # ---------------------------------------------------------
 years = np.array([2026, 2027, 2028, 2029, 2030])
-bev_est = np.array([2600, 3000, 3500, 4200, 5000]) * stress_auto
-quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) * stress_competizione
+bev_base = np.array([2600, 3000, 3500, 4200, 5000]) * crescita_bev
+quota_mercato = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) * efficacia_stazione
 
-# Energia e Operatività
-energia_kwh = bev_est * 3000 * 0.30 * quota_stazione
-n_colonnine = np.ceil(energia_kwh / (30 * 8760 * 0.97 * 0.30)).astype(int)
+# Domanda e Dimensionamento
+energia_tot = bev_base * carica_media * 0.30 * quota_mercato
+capacita_colonnina = 30 * 8760 * 0.97 * 0.30 
+n_colonnine = np.ceil(energia_tot / capacita_colonnina).astype(int)
 
-# Conto Economico
-ricavi = energia_kwh * prezzo_kwh
-costi_energia = energia_kwh * costo_kwh
-opex = n_colonnine * 2000
-ebitda = ricavi - costi_energia - opex
+# Conto Economico e Fisco
+ricavi = energia_tot * prezzo_kwh
+ebitda = (energia_tot * (prezzo_kwh - 0.30)) - (n_colonnine * opex_target)
+tasse = np.maximum(0, ebitda * 0.24) # IRES/IRAP stimata
+utile_netto = ebitda - tasse
 
-# Fisco e Ammortamenti (Ammortamento in 5 anni)
-ammortamento = np.zeros(len(years))
+# Flussi di Cassa
 capex_flow = np.zeros(len(years))
 prev_n = 0
-accum_capex = 0
-
 for i, n in enumerate(n_colonnine):
-    nuove = max(0, n - prev_n)
-    capex_flow[i] = nuove * capex_unit
-    accum_capex += capex_flow[i]
-    ammortamento[i] = accum_capex / 5 # Semplificato lineare
+    capex_flow[i] = max(0, n - prev_n) * capex_unit
     prev_n = n
 
-ebt = ebitda - ammortamento
-tasse = np.maximum(0, ebt * tax_rate)
-utile_netto = ebt - tasse
-cf_operativo = utile_netto + ammortamento - capex_flow # Flusso di cassa reale
-cf_cum = np.cumsum(cf_operativo)
+cash_flow = utile_netto - capex_flow
+cf_cum = np.cumsum(cash_flow)
 
-# Indicatori Decisionali
-van = npf.npv(wacc, cf_operativo)
-tir = npf.irr(cf_operativo)
-break_even_prezzo = (costi_energia + opex) / energia_kwh # Prezzo minimo per EBITDA=0
+# Indicatori Finanziari
+van = npf.npv(wacc, cash_flow)
+tir = npf.irr(cash_flow)
 
 # ---------------------------------------------------------
-# UI: DASHBOARD DECISIONALE
+# OUTPUT CHIARO E SPIEGATO
 # ---------------------------------------------------------
-st.subheader("🏁 Indicatori di Redditività Netta")
-c1, c2, c3, c4 = st.columns(4)
 
-tir_val = f"{tir*100:.2f}%" if not np.isnan(tir) else "N/D"
-c1.metric("VAN (Valore Attuale)", f"€ {van:,.0f}", delta="INVESTIRE" if van > 0 else "EVITARE")
-c2.metric("TIR (Rendimento)", tir_val)
-c3.metric("Break-even Prezzo", f"€ {break_even_prezzo.mean():.2f}/kWh", help="Sotto questo prezzo medio vai in perdita operativa.")
-c4.metric("Utile Netto Totale (5y)", f"€ {np.sum(utile_netto):,.0f}")
+# 1. Riquadro Verdetto
+st.subheader("✅ Analisi Sintetica per l'Investitore")
+v1, v2, v3 = st.columns([1, 1, 2])
 
-# Analisi Grafica
+with v1:
+    st.metric("Valore Creato (VAN)", f"€ {van:,.0f}")
+    if van > 0: st.success("PROGETTO BANCABILE")
+    else: st.error("PROGETTO NON REDDITIZIO")
+
+with v2:
+    tir_val = f"{tir*100:.1f}%" if not np.isnan(tir) else "N/D"
+    st.metric("Rendimento Interno (TIR)", tir_val)
+    st.caption(f"WACC obiettivo: {wacc*100}%")
+
+with v3:
+    st.markdown(f"""
+    **Perché questo risultato?**
+    - Hai un margine di **{(prezzo_kwh-0.30)/prezzo_kwh:.1%}%** su ogni kWh venduto.
+    - La stazione raggiunge il pareggio (Payback) nel **{years[np.where(cf_cum >= 0)[0][0]] if any(cf_cum >= 0) else "Oltre 2030"}**.
+    - Con lo scenario impostato, venderai **{energia_tot.sum():,.0f} kWh** in 5 anni.
+    """)
+
+# 2. Analisi di Sensibilità
 st.divider()
-g1, g2 = st.columns(2)
+st.subheader("📈 Stress Test: Cosa succede se lo scenario cambia?")
+col_g1, col_g2 = st.columns(2)
 
-with g1:
-    st.write("**Cash Flow Netto vs Tasse**")
+with col_g1:
+    st.write("**Resilienza del Cash Flow**")
     fig1, ax1 = plt.subplots()
-    ax1.bar(years, ebitda, label="EBITDA (Lordo)", color="#bdc3c7")
-    ax1.bar(years, utile_netto, label="Utile Netto (Post-Tasse)", color="#2ecc71")
-    ax1.set_title("Evoluzione Profittabilità")
-    ax1.legend()
+    ax1.plot(years, cf_cum, marker='o', linewidth=3, color='#1f77b4')
+    ax1.axhline(0, color='red', linestyle='--')
+    ax1.set_title("Punto di Recupero Capitale")
+    ax1.set_ylabel("Euro (€)")
     st.pyplot(fig1)
 
-with g2:
-    st.write("**Saturazione Infrastruttura**")
-    saturazione = (energia_kwh / (n_colonnine * 30 * 8760 * 0.97)) * 100
+with col_g2:
+    st.write("**Evoluzione Infrastruttura**")
     fig2, ax2 = plt.subplots()
-    ax2.plot(years, saturazione, marker='s', color="#e67e22", linewidth=2)
-    ax2.axhline(30, color="red", linestyle="--", label="Target 30%")
-    ax2.set_ylim(0, 100)
-    ax2.set_title("% Utilizzo Reale Colonnine")
-    ax2.legend()
+    ax2.bar(years, energia_tot, color='#7f7f7f', alpha=0.5, label="Energia Venduta (kWh)")
+    ax2_tw = ax2.twinx()
+    ax2_tw.step(years, n_colonnine, where='post', color='red', label="N. Colonnine")
+    ax2.set_title("Domanda vs Numero Colonnine")
     st.pyplot(fig2)
 
-st.subheader("📋 Prospetto Finanziario Completo")
-st.dataframe(pd.DataFrame({
-    "Energia (kWh)": energia_kwh.astype(int),
-    "Colonnine": n_colonnine,
-    "EBITDA (€)": ebitda.astype(int),
-    "Ammortamento (€)": ammortamento.astype(int),
-    "Tasse (€)": tasse.astype(int),
-    "Utile Netto (€)": utile_netto.astype(int),
-    "CF Cumulato (€)": cf_cum.astype(int)
-}, index=years).T, use_container_width=True)
+# 3. Tabella Dettagliata per Analisi
+with st.expander("🔍 Vedi Dettagli Numerici (Conto Economico e Cash Flow)"):
+    df = pd.DataFrame({
+        "Anno": years,
+        "Auto Elettriche (Area)": bev_base.astype(int),
+        "Energia Erogata (kWh)": energia_tot.astype(int),
+        "Colonnine Attive": n_colonnine,
+        "EBITDA (€)": ebitda.astype(int),
+        "Cash Flow Netto (€)": cash_flow.astype(int),
+        "Cash Flow Cumulato (€)": cf_cum.astype(int)
+    }).set_index("Anno")
+    st.table(df)
