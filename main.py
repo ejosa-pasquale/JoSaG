@@ -4,39 +4,55 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy_financial as npf
 
-st.set_page_config(page_title="CFO Suite - DC30 Palermo", layout="wide")
+st.set_page_config(page_title="Investment Readiness Tool", layout="wide")
 
-st.title("🏛️ Decision Support System: Infrastruttura DC30 kW")
-st.markdown("Analisi strategica e finanziaria completa per il Management.")
+st.title("🛡️ Investment Readiness Tool: Stazione di Servizio Palermo")
+st.info("Modello integrato: Mercato + Finanza + Capacità Tecnica. Basato su Report 22/01/2026.")
 
 # --- SIDEBAR: LEVE DECISIONALI E SCENARI ---
-st.sidebar.header("🕹️ Variabili Decisionali (GM)")
-with st.sidebar.expander("💼 Strategia e Pricing", expanded=True):
-    prezzo_kwh = st.number_input("Prezzo vendita (€/kWh)", value=0.69, step=0.01)
-    costo_kwh = st.number_input("Costo energia (€/kWh)", value=0.30, step=0.01)
-    capex_unit = st.number_input("CAPEX per unità (€)", value=25000)
-    opex_fisso = st.number_input("OPEX annuo/colonnina (€)", value=2000)
+st.sidebar.header("🕹️ Variabili Decisionali (Il tuo controllo)")
+with st.sidebar.expander("💼 Scelte Strategiche", expanded=True):
+    tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"])
+    prezzo_kwh = st.number_input("Prezzo vendita (€/kWh)", value=0.69)
+    costo_kwh = st.number_input("Costo energia (€/kWh)", value=0.30)
+    wacc = st.slider("Costo del Capitale (WACC %)", 4, 12, 8) / 100
 
-st.sidebar.header("📊 Ipotesi di Scenario (Mercato)")
-with st.sidebar.expander("🌍 Driver di Domanda", expanded=True):
+with st.sidebar.expander("⚙️ Parametri Tecnici"):
+    # Logica dinamica basata sulla scelta tecnologica
+    if tecnologia == "DC 30 kW":
+        potenza_kw = 30
+        capex_unit = st.number_input("CAPEX per unità (€)", value=25000)
+        opex_unit = 2000
+    else:
+        potenza_kw = 60
+        capex_unit = st.number_input("CAPEX per unità (€)", value=45000)
+        opex_unit = 3500
+    ore_max_giorno = st.slider("Disponibilità operativa (ore/giorno)", 4, 12, 10)
+
+st.sidebar.header("📊 Ipotesi di Scenario (Rischi Esterni)")
+with st.sidebar.expander("🌍 Driver di Mercato"):
     stress_bev = st.slider("Stress Test Parco BEV (%)", 50, 150, 100) / 100
     public_share = st.slider("Quota Ricarica Pubblica (%)", 10, 50, 30) / 100
-    carica_media_anno = st.number_input("Carica Media/Anno (kWh)", value=3000)
-    stress_cattura = st.slider("Efficacia Cattura Stazione (%)", 50, 150, 100) / 100
+    carica_media_anno = st.number_input("Carica Media/Auto (kWh/y)", value=3000)
+    stress_cattura = st.slider("Efficacia Cattura (%)", 50, 150, 100) / 100
 
-# --- LOGICA DI CALCOLO (Fedele al Report) ---
+# --- LOGICA DI CALCOLO UNIFICATA ---
 years = np.array([2026, 2027, 2028, 2029, 2030])
-bev_citta = np.array([2600, 3000, 3500, 4200, 5000]) * stress_bev
+bev_palermo = np.array([2600, 3000, 3500, 4200, 5000]) * stress_bev
 quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) * stress_cattura
 
-# Conversione in clienti reali
-auto_in_carica = bev_citta * public_share * quota_stazione
-energia_kwh = auto_in_carica * carica_media_anno
+# Calcolo Volumi e Capacità
+auto_clienti = bev_palermo * public_share * quota_stazione
+energia_kwh = auto_clienti * carica_media_anno
+ore_carica_richieste = energia_kwh / potenza_kw
+ore_disponibili_per_asset = ore_max_giorno * 365
 
-# Dimensionamento e Finanza
-n_colonnine = np.ceil(energia_kwh / (30 * 8760 * 0.97 * 0.30)).astype(int)
+# Dimensionamento scalabile: aggiunge colonnine se le ore superano la capacità
+n_colonnine = np.ceil(ore_carica_richieste / ore_disponibili_per_asset).astype(int)
+
+# Conto Economico
 ricavi = energia_kwh * prezzo_kwh
-ebitda = (energia_kwh * (prezzo_kwh - costo_kwh)) - (n_colonnine * opex_fisso)
+ebitda = (energia_kwh * (prezzo_kwh - costo_kwh)) - (n_colonnine * opex_unit)
 
 capex_flow = np.zeros(len(years))
 prev_n = 0
@@ -47,81 +63,68 @@ for i, n in enumerate(n_colonnine):
 cf_netto = ebitda - capex_flow
 cf_cum = np.cumsum(cf_netto)
 
-# --- KPI EXECUTIVE ---
-st.subheader("🏁 Executive Summary")
+# --- DASHBOARD KPI ---
+st.subheader("🏁 Indicatori Finanziari & Operativi")
 k1, k2, k3, k4 = st.columns(4)
-van = npf.npv(0.08, cf_netto)
-k1.metric("VAN (NPV)", f"€ {van:,.0f}", help="Valore Attuale Netto (WACC 8%)")
-k2.metric("TIR (IRR)", f"{(npf.irr(cf_netto)*100):.1f}%", help="Rendimento interno")
+van = npf.npv(wacc, cf_netto)
+k1.metric("VAN (NPV)", f"€ {van:,.0f}", help="Se > 0 l'investimento batte il mercato")
+k2.metric("TIR (IRR)", f"{(npf.irr(cf_netto)*100):.1f}%")
 k3.metric("Auto/Giorno (Media)", f"{((energia_kwh/35)/365).mean():.1f}")
-k4.metric("Payback", years[np.where(cf_cum >= 0)[0][0]] if any(cf_cum >= 0) else "Oltre 2030")
+k4.metric("Saturazione 2030", f"{(ore_carica_richieste[-1]/(n_colonnine[-1]*ore_disponibili_per_asset)*100):.1f}%")
 
 # --- TUTTI I GRAFICI RICHIESTI ---
 st.divider()
-st.subheader("📊 Analisi Decisionale Completa")
-
+st.subheader("📊 Intelligence Visuale")
 c1, c2 = st.columns(2)
+
 with c1:
-    st.write("**1. Soglia di Redditività (Break-even)**")
+    st.write("**1. Break-even: Auto necessarie al giorno**")
     auto_range = np.linspace(1, 15, 20)
     margine_carica = 35 * (prezzo_kwh - costo_kwh)
-    break_even_point = (opex_fisso + (capex_unit/5)) / 365
-    profitto_day = (auto_range * margine_carica) - break_even_point
+    costo_fisso_day = (opex_unit + (capex_unit/5)) / 365
+    profitto_day = (auto_range * margine_carica) - costo_fisso_day
     fig1, ax1 = plt.subplots()
     ax1.plot(auto_range, profitto_day, color='green', linewidth=3)
     ax1.axhline(0, color='red', linestyle='--')
-    ax1.set_xlabel("Ricariche Giornaliere (n. auto)")
-    ax1.set_title("Utile Giornaliero per Colonnina")
+    ax1.set_xlabel("N. Ricariche giornaliere per unità")
     st.pyplot(fig1)
 
 with c2:
-    st.write("**2. Cash Flow Cumulato (Recupero Investimento)**")
+    st.write("**2. Cash Flow Cumulato (Recupero)**")
     fig2, ax2 = plt.subplots()
     ax2.plot(years, cf_cum, marker='o', color='navy', linewidth=3)
-    ax2.fill_between(years, cf_cum, 0, where=(cf_cum >= 0), color='green', alpha=0.1)
+    ax2.fill_between(years, cf_cum, 0, color='blue', alpha=0.1)
     ax2.axhline(0, color='black', linewidth=1)
     st.pyplot(fig2)
 
 c3, c4 = st.columns(2)
 with c3:
-    st.write("**3. Scalabilità Asset (Domanda vs Capacità)**")
+    st.write("**3. Capacità Fisica: Domanda vs Asset**")
     fig3, ax3 = plt.subplots()
-    ax3.bar(years, energia_kwh/1000, color='gray', alpha=0.5, label="Energia (MWh)")
+    ax3.bar(years, ore_carica_richieste, color='skyblue', label="Ore ricarica richieste")
     ax3_tw = ax3.twinx()
-    ax3_tw.step(years, n_colonnine, where='post', color='red', linewidth=2, label="N. Colonnine")
-    ax3.set_title("MWh Venduti vs Colonnine Installate")
+    ax3_tw.step(years, n_colonnine * ore_disponibili_per_asset, where='post', color='red', label="Capacità ore")
     st.pyplot(fig3)
 
 with c4:
-    st.write("**4. Struttura dei Margini (5 Anni)**")
+    st.write("**4. Struttura dei Margini (Totale 5 Anni)**")
     fig4, ax4 = plt.subplots()
-    labels = ['Ricavi Tot', 'Costi Energia', 'CAPEX Tot', 'EBITDA Tot']
+    labels = ['Ricavi', 'Costi Energia', 'CAPEX', 'EBITDA']
     vals = [ricavi.sum(), (energia_kwh * costo_kwh).sum(), capex_flow.sum(), ebitda.sum()]
     ax4.bar(labels, vals, color=['#2ecc71', '#e67e22', '#e74c3c', '#3498db'])
     st.pyplot(fig4)
 
-# --- TABELLA DETTAGLIATA (Richiesta) ---
+# --- TABELLA ANALITICA COMPLETA ---
 st.divider()
-st.subheader("📊 Tabella Analitica: Dal Mercato alla Cassa")
+st.subheader("📊 Analisi Dettagliata (Dati Report + Conversione)")
 df_table = pd.DataFrame({
     "Anno": years,
-    "BEV in Città": bev_citta.astype(int),
-    "Clienti in Carica (Previsti)": auto_in_carica.astype(int),
-    "Carica Media (kWh/anno)": [carica_media_anno] * 5,
-    "Energia Totale (kWh)": energia_kwh.astype(int),
+    "BEV Palermo": bev_palermo.astype(int),
+    "Clienti Catturati": auto_clienti.astype(int),
+    "Energia (kWh)": energia_kwh.astype(int),
+    "Ore Richieste": ore_carica_richieste.astype(int),
     "N. Colonnine": n_colonnine,
     "EBITDA (€)": ebitda.astype(int),
-    "Cash Flow Cumulato (€)": cf_cum.astype(int)
+    "CF Cumulato (€)": cf_cum.astype(int)
 }).set_index("Anno")
 st.table(df_table)
-
-# --- SPIEGAZIONE VARIABILI ---
-st.divider()
-with st.expander("📚 Glossario e Spiegazione Variabili per la Decisione"):
-    st.markdown(f"""
-    - **BEV in Città**: Numero totale di auto elettriche stimate a Palermo. È la base del tuo mercato.
-    - **Clienti in Carica**: Numero di auto che scelgono la tua stazione. Si ottiene applicando la *Quota Pubblica* (chi non carica a casa) e la *Efficacia Cattura* (tua forza rispetto ai competitor).
-    - **Carica Media**: Quanta energia ogni cliente "catturato" acquista da te in un anno.
-    - **Break-even Operativo**: Il Grafico 1 mostra che con i costi attuali ti servono **{break_even_point/margine_carica:.1f} auto al giorno** per coprire i costi fissi e l'ammortamento.
-    - **Scalabilità Asset**: Il Grafico 3 indica quando il volume di vendita giustifica l'acquisto di una nuova macchina per non superare il target di utilizzo del 30%.
-    """)
