@@ -3,109 +3,138 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Configurazione Pagina
-st.set_page_config(page_title="Analisi DC30 - Stazione di Servizio", layout="wide")
+# Configurazione della pagina
+st.set_page_config(page_title="Business Case DC30 Palermo", layout="wide")
 
-st.title("⚡ Business Case Interattivo: Ricarica DC 30 kW")
-st.markdown("Questa applicazione permette di simulare la redditività dell'installazione di punti di ricarica in una stazione di servizio.")
+st.title("⚡ Business Case: Ricarica DC 30 kW in Stazione di Servizio")
+st.markdown("""
+Questa applicazione simula la redditività di una stazione di ricarica nel centro di Palermo. 
+Il modello è scalabile: il numero di colonnine aumenta automaticamente per soddisfare la domanda crescente.
+""")
 
 # ---------------------------------------------------------
-# 1) SIDEBAR: PARAMETRI DI INPUT (SENSITIVITÀ)
+# 1) SIDEBAR: CONFIGURAZIONE PARAMETRI (INPUT)
 # ---------------------------------------------------------
-st.sidebar.header("🕹️ Parametri di Configurazione")
+st.sidebar.header("🕹️ Parametri di Scelta")
 
 with st.sidebar.expander("📈 Mercato e Domanda", expanded=True):
-    utilizzazione_target = st.slider("Utilizzo medio annuo (%)", 5, 60, 30, help="Percentuale di tempo in cui la colonnina eroga energia alla massima potenza.") / 100
-    quota_pubblico = st.slider("Quota ricarica pubblica (%)", 10, 80, 30, help="Percentuale di possessori di BEV che non caricano a casa e usano la rete pubblica.") / 100
+    utilizzazione_target = st.slider(
+        "Utilizzo Target (%)", 5, 60, 30, 
+        help="La saturazione desiderata della colonnina. Al 30%, la colonnina lavora circa 7 ore al giorno. Più è alto, più l'impianto è efficiente ma rischia code."
+    ) / 100
+    
+    quota_pubblico = st.slider(
+        "Quota Ricarica Pubblica (%)", 10, 80, 30, 
+        help="Percentuale di proprietari di auto elettriche che non ricaricano a casa e devono usare stazioni pubbliche."
+    ) / 100
 
-with st.sidebar.expander("💰 Economia e CAPEX"):
-    prezzo_vendita = st.number_input("Prezzo vendita (€/kWh)", value=0.69, step=0.01)
-    costo_energia = st.number_input("Costo energia (€/kWh)", value=0.30, step=0.01)
-    capex_per_colonnina = st.slider("CAPEX per unità (€)", 15000, 35000, 25000)
-    opex_annuo = st.number_input("OPEX annuo per unità (€)", value=2000, help="Costi di manutenzione, software e occupazione suolo.")
+with st.sidebar.expander("💰 Economia e Investimento", expanded=True):
+    prezzo_vendita = st.number_input(
+        "Prezzo vendita (€/kWh)", value=0.69, step=0.01,
+        help="Prezzo finale pagato dall'utente alla colonnina."
+    )
+    costo_energia = st.number_input(
+        "Costo energia (€/kWh)", value=0.30, step=0.01,
+        help="Costo di acquisto della materia prima energia (prezzo all'ingrosso + oneri)."
+    )
+    capex_per_colonnina = st.slider(
+        "CAPEX per unità (€)", 15000, 35000, 25000,
+        help="Costo di acquisto, installazione e allaccio di una singola colonnina DC 30 kW."
+    )
+    opex_annuo = st.number_input(
+        "OPEX annuo per unità (€)", value=2000,
+        help="Spese correnti: manutenzione, canoni software, occupazione suolo e assicurazione."
+    )
 
 # ---------------------------------------------------------
-# 2) LOGICA DI CALCOLO (Basata su Report [cite: 39, 53, 109])
+# 2) LOGICA DI CALCOLO (Dati da Report 22/01/2026)
 # ---------------------------------------------------------
 years = np.array([2026, 2027, 2028, 2029, 2030])
-bev_palermo = np.array([2600, 3000, 3500, 4200, 5000]) [cite: 28]
-quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) [cite: 31]
 
-# Calcoli Tecnici
-capacita_unitaria = 30 * 8760 * 0.97 * utilizzazione_target [cite: 39]
-energia_intercettata = bev_palermo * 3000 * quota_pubblico * quota_stazione [cite: 53]
+# Dati stimati per l'area di Palermo 
+bev_palermo = np.array([2600, 3000, 3500, 4200, 5000]) 
+quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) 
+
+# Capacità tecnica annua di una colonnina (kWh) 
+# Calcolo: Potenza (30kW) * Ore anno (8760) * Uptime (97%) * Utilizzo Target
+capacita_unitaria = 30 * 8760 * 0.97 * utilizzazione_target
+
+# Calcolo Energia Intercettata (kWh) [cite: 53]
+# Formula: Parco BEV * Consumo annuo (3000 kWh) * Quota Pubblica * Quota Stazione
+energia_intercettata = bev_palermo * 3000 * quota_pubblico * quota_stazione
+
+# Numero colonnine necessarie (scalabilità) 
 colonnine_necessarie = np.ceil(energia_intercettata / capacita_unitaria).astype(int)
 
-# Calcoli Economici
+# Calcoli Economici [cite: 82, 83]
 ricavi = energia_intercettata * prezzo_vendita
-margine_unitario = prezzo_vendita - costo_energia
-ebitda = (energia_intercettata * margine_unitario) - (colonnine_necessarie * opex_annuo)
+margine_energia = energia_intercettata * (prezzo_vendita - costo_energia)
+ebitda = margine_energia - (colonnine_necessarie * opex_annuo)
 
-# Cash Flow e ROI
-capex_flusso = np.zeros(len(years))
+# Cash Flow e Investimento [cite: 109]
+capex_annuale = np.zeros(len(years))
 prev_n = 0
 for i, n in enumerate(colonnine_necessarie):
-    nuove = max(0, n - prev_n)
-    capex_flusso[i] = nuove * capex_per_colonnina
+    nuove_installazioni = max(0, n - prev_n)
+    capex_annuale[i] = nuove_installazioni * capex_per_colonnina
     prev_n = n
 
-cf_netto = ebitda - capex_flusso
+cf_netto = ebitda - capex_annuale
 cf_cumulato = np.cumsum(cf_netto)
-roi_cumulato = cf_cumulato[-1] / np.sum(capex_flusso) if np.sum(capex_flusso) > 0 else 0
 
 # ---------------------------------------------------------
-# 3) VISUALIZZAZIONE OUTPUT
+# 3) OUTPUT VISIVI
 # ---------------------------------------------------------
 
-# Sezione KPI
-st.subheader("📌 Indicatori Chiave di Performance (KPI)")
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Payback Period", years[np.where(cf_cumulato >= 0)[0][0]] if any(cf_cumulato >= 0) else "Oltre 2030")
-k2.metric("ROI Cumulato (2030)", f"{roi_cumulato:.2f}x")
-k3.metric("Margine su Energia", f"{((margine_unitario/prezzo_vendita)*100):.1f}%")
-k4.metric("EBITDA Totale (5y)", f"€ {np.sum(ebitda):,.0f}")
+# KPI in alto
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Payback (Rientro)", years[np.where(cf_cumulato >= 0)[0][0]] if any(cf_cumulato >= 0) else "Oltre 2030")
+c2.metric("ROI Cumulato 2030", f"{(cf_cumulato[-1] / np.sum(capex_annuale)):.2f}x")
+c3.metric("EBITDA 2030", f"€ {ebitda[-1]:,.0f}")
+c4.metric("Colonnine Finali", f"{colonnine_necessarie[-1]}")
 
-# Tabelle Dettagliate
-st.subheader("📊 Report Dettagliato")
-col_tab1, col_tab2 = st.columns([2, 1])
-
-with col_tab1:
-    st.write("**Tabella Economica Completa**")
-    df_out = pd.DataFrame({
-        "Anno": years,
-        "Domanda (kWh)": energia_intercettata.astype(int),
-        "N. Colonnine": colonnine_necessarie,
-        "EBITDA (€)": ebitda.astype(int),
-        "CAPEX (€)": capex_flusso.astype(int),
-        "Cash Flow Netto (€)": cf_netto.astype(int),
-        "CF Cumulato (€)": cf_cumulato.astype(int)
-    })
-    st.dataframe(df_out, use_container_width=True)
-
-with col_tab2:
-    st.write("**Dizionario Parametri**")
-    st.info("""
-    - **Utilizzo Target**: La saturazione della stazione. Il 30% è lo scenario base del report[cite: 35].
-    - **Quota Pubblico**: Quanta energia viene caricata fuori casa (scenario base 30%).
-    - **Quota Stazione**: La capacità della TUA stazione di attrarre clienti a Palermo[cite: 31].
-    - **CAPEX**: Costo acquisto e installazione (Scenario Base: 25.000€)[cite: 12].
-    """)
+# Tabelle
+st.subheader("📊 Proiezioni Finanziarie 2026-2030")
+df_display = pd.DataFrame({
+    "Anno": years,
+    "BEV Palermo": bev_palermo,
+    "Energia Venduta (kWh)": energia_intercettata.astype(int),
+    "Colonnine Attive": colonnine_necessarie,
+    "Ricavi (€)": ricavi.astype(int),
+    "EBITDA (€)": ebitda.astype(int),
+    "CAPEX Anno (€)": capex_annuale.astype(int),
+    "Cash Flow Cumulato (€)": cf_cumulato.astype(int)
+})
+st.dataframe(df_display.set_index("Anno"), use_container_width=True)
 
 # Grafici
-st.subheader("📈 Analisi Grafica")
+st.subheader("📈 Analisi di Crescita e Payback")
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
 
-# Grafico 1: Scalabilità
-ax1.bar(years, ebitda, color='skyblue', label='EBITDA (€)')
+# Grafico 1: Scalabilità Domanda vs Colonnine
+ax1.bar(years, energia_intercettata/1000, color='skyblue', alpha=0.6, label="MWh Venduti")
+ax1.set_ylabel("MWh / anno")
 ax1_tw = ax1.twinx()
-ax1_tw.step(years, colonnine_necessarie, where='post', color='red', label='N. Colonnine', linewidth=2)
-ax1.set_title("Crescita EBITDA vs Numero Colonnine")
+ax1_tw.step(years, colonnine_necessarie, where='post', color='red', linewidth=2, label="N. Colonnine")
+ax1_tw.set_ylabel("Numero Colonnine")
+ax1.set_title("Evoluzione Domanda e Infrastruttura")
 ax1.legend(loc='upper left')
 
 # Grafico 2: Cash Flow Cumulato
-ax2.plot(years, cf_cumulato, marker='o', color='green', linewidth=2)
-ax2.axhline(0, color='black', linestyle='--')
-ax2.set_title("Rientro dell'Investimento (Cash Flow Cumulato)")
+ax2.plot(years, cf_cumulato/1000, marker='o', color='green', linewidth=2, label="CF Cumulato (k€)")
+ax2.axhline(0, color='black', linestyle='--', linewidth=1)
+ax2.set_title("Punto di Pareggio (Break-even)")
+ax2.set_ylabel("k€ Cumulati")
 ax2.grid(True, alpha=0.3)
+ax2.legend()
 
 st.pyplot(fig)
+
+# Spiegazione Parametri
+with st.expander("📚 Glossario e Spiegazione Parametri"):
+    st.write("""
+    - **Utilizzo Target**: È il parametro critico. Se la stazione è in una zona di alto passaggio, l'utilizzo sarà alto (es. 35%). Se l'utilizzo è basso, l'investimento impiega più anni a rientrare.
+    - **Quota Ricarica Pubblica**: Indica quanto il mercato locale dipende dalle colonnine. Più è alta (es. 50%), più energia venderai.
+    - **EBITDA**: Rappresenta il guadagno operativo prima delle tasse e degli ammortamenti. Si calcola come: `(Margine su kWh * kWh venduti) - Spese operative (OPEX)`.
+    - **Payback**: L'anno in cui la linea verde del grafico tocca lo zero, indicando che hai recuperato tutto il capitale investito (CAPEX).
+    """)
