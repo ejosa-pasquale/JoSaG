@@ -305,4 +305,346 @@ with st.sidebar.expander("CAPEX (investimento)", expanded=True):
 
 with st.sidebar.expander("OPEX (costi fissi)", expanded=True):
     maint_per_unit = st.number_input("Maintenance per unità/anno (€)", min_value=0.0, value=2200.0, step=100.0)
-    backe
+    backend_per_unit = st.number_input("Backend+SIM+customer care per unità/anno (€)", min_value=0.0, value=900.0, step=100.0)
+    lease_per_unit = st.number_input("Canone/royalty sito per unità/anno (€)", min_value=0.0, value=1200.0, step=100.0)
+    fixed_opex_site = st.number_input("Costi fissi sito/anno (€)", min_value=0.0, value=2500.0, step=250.0)
+    demand_charge_eur_per_kw_year = st.number_input("Demand charges (€/kW-anno)", min_value=0.0, value=0.0, step=5.0)
+    contracted_power_factor = st.slider("Fattore potenza contrattuale", 0.3, 1.0, 0.8)
+    inflation = st.slider("Inflazione OPEX annua %", 0.0, 8.0, 2.0) / 100
+
+st.sidebar.header("4) Parametri CFO (opzionali)")
+with st.sidebar.expander("WACC / Tasse / Ammortamenti / Working capital", expanded=False):
+    wacc = st.slider("WACC %", 4.0, 15.0, 8.0) / 100
+    tax_rate = st.slider("Tax rate effettivo %", 0.0, 40.0, 28.0) / 100
+    depr_years = st.slider("Ammortamento (anni)", 3, 15, 8)
+    nwc_pct = st.slider("Working capital (% fatturato)", 0.0, 20.0, 2.0) / 100
+
+st.sidebar.header("5) Soglie semaforo (decisione)")
+with st.sidebar.expander("Soglie", expanded=True):
+    max_payback_years = st.slider("Payback massimo accettabile (anni)", 2, 12, 6)
+    max_lost_sales_pct = st.slider("Vendite perse massime (%) nel 2030", 0, 40, 10)
+    min_roi_pct = st.slider("ROI minimo (%) sull'orizzonte", -20, 200, 20)
+
+st.sidebar.header("6) Demand inputs")
+if demand_model == "Bottom-up (Traffico sito)":
+    with st.sidebar.expander("Traffico → EV → Conversione", expanded=True):
+        traffic_veicoli_giorno = st.number_input("Traffico passante (veicoli/giorno)", min_value=0, value=12000, step=500)
+        traffic_growth = st.slider("Crescita traffico annua %", -5.0, 10.0, 0.0) / 100
+        ingress_rate = st.slider("Ingress rate % (entrano nel sito)", 0.0, 20.0, 3.0) / 100
+        ev_share_2026 = st.slider("Quota EV 2026 %", 0.0, 20.0, 2.0) / 100
+        ev_share_2030 = st.slider("Quota EV 2030 %", 0.0, 40.0, 10.0) / 100
+        ev_share_2035 = st.slider("Quota EV 2035 %", 0.0, 60.0, 18.0) / 100
+        conversione_ricarica = st.slider("Conversione a ricarica %", 0.0, 50.0, 8.0) / 100
+        competitor_factor = st.slider("Fattore concorrenza (0.5 forte, 1 neutro, 1.3 vantaggio)", 0.50, 1.30, 1.00)
+        prezzo_mercato_ref = st.number_input("Prezzo mercato riferimento (€/kWh)", min_value=0.1, value=0.69, step=0.01)
+        price_elasticity = st.slider("Elasticità prezzo", 0.0, 2.0, 0.6)
+        ramp_start_pct = st.slider("Ramp-up 1° anno %", 10, 100, 60) / 100
+        ramp_years_to_full = st.slider("Anni per arrivare al 100%", 0, 3, 1)
+else:
+    with st.sidebar.expander("Parco BEV → cattura → quota kWh a te", expanded=True):
+        bev_target_2030 = st.number_input("BEV città target 2030", min_value=0, value=5000, step=500)
+        stress_bev = st.slider("Stress adozione BEV %", 50, 150, 100) / 100
+        bev_start_ratio_2026 = st.slider("BEV 2026 come % del 2030", 10, 90, 50) / 100
+        bev_growth_2035_vs_2030 = st.slider("BEV 2035 come % del 2030", 100, 200, 130) / 100
+        public_share = st.slider("Quota dipendenza ricarica pubblica %", 5, 80, 30) / 100
+        capture_2026 = st.slider("Quota cattura 2026 %", 0.1, 10.0, 1.0) / 100
+        capture_2030 = st.slider("Quota cattura 2030 %", 0.1, 20.0, 5.0) / 100
+        capture_2035 = st.slider("Quota cattura 2035 %", 0.1, 25.0, 6.0) / 100
+        stress_cattura = st.slider("Stress efficacia competitiva %", 50, 150, 100) / 100
+        km_per_ev_year = st.number_input("Km/anno per EV", min_value=1000, value=12000, step=500)
+        kwh_per_100km = st.number_input("Consumo EV (kWh/100km)", min_value=8.0, value=18.0, step=0.5)
+        share_kwh_at_station = st.slider("Quota kWh EV erogata da te %", 1, 80, 25) / 100
+        ramp_start_pct = st.slider("Ramp-up 1° anno %", 10, 100, 60) / 100
+        ramp_years_to_full = st.slider("Anni per arrivare al 100%", 0, 3, 1)
+
+# ============================================================
+# Params
+# ============================================================
+base_params = {
+    "years": years,
+    "demand_model": demand_model,
+    "tecnologia": tecnologia,
+    "allocazione": allocazione,
+
+    "ore_max_giorno": float(ore_max_giorno),
+    "kwh_per_session": float(kwh_per_session),
+    "taper_factor": float(taper_factor),
+    "overhead_min": float(overhead_min),
+    "uptime": float(uptime),
+    "util_target": float(util_target),
+
+    "min_units": int(min_units),
+    "max_units_installabili": int(max_units_installabili),
+    "potenza_disponibile_kw": float(potenza_disponibile_kw),
+
+    "prezzo_kwh": float(prezzo_kwh),
+    "costo_kwh": float(costo_kwh),
+    "price_escal": float(price_escal),
+    "cost_escal": float(cost_escal),
+    "payment_fee_pct": float(payment_fee_pct),
+    "ancillary_margin_per_session": float(ancillary_margin_per_session),
+
+    "capex_unit": float(capex_unit),
+    "capex_fixed_site_A": float(capex_fixed_site_A),
+    "capex_fixed_site_B": float(capex_fixed_site_B),
+    "decommissioning_cost": float(decommissioning_cost),
+    "residual_recovery_pct": float(residual_recovery_pct),
+
+    "maint_per_unit": float(maint_per_unit),
+    "backend_per_unit": float(backend_per_unit),
+    "lease_per_unit": float(lease_per_unit),
+    "fixed_opex_site": float(fixed_opex_site),
+    "demand_charge_eur_per_kw_year": float(demand_charge_eur_per_kw_year),
+    "contracted_power_factor": float(contracted_power_factor),
+    "inflation": float(inflation),
+
+    "wacc": float(wacc),
+    "tax_rate": float(tax_rate),
+    "depr_years": int(depr_years),
+    "nwc_pct": float(nwc_pct),
+
+    "ramp_start_pct": float(ramp_start_pct),
+    "ramp_years_to_full": int(ramp_years_to_full),
+}
+
+if demand_model == "Bottom-up (Traffico sito)":
+    base_params.update({
+        "traffic_veicoli_giorno": int(traffic_veicoli_giorno),
+        "traffic_growth": float(traffic_growth),
+        "ingress_rate": float(ingress_rate),
+        "ev_share_2026": float(ev_share_2026),
+        "ev_share_2030": float(ev_share_2030),
+        "ev_share_2035": float(ev_share_2035),
+        "conversione_ricarica": float(conversione_ricarica),
+        "competitor_factor": float(competitor_factor),
+        "prezzo_mercato_ref": float(prezzo_mercato_ref),
+        "price_elasticity": float(price_elasticity),
+
+        # placeholders top-down
+        "bev_target_2030": 0, "stress_bev": 1.0, "bev_start_ratio_2026": 0.5, "bev_growth_2035_vs_2030": 1.3,
+        "public_share": 0.3, "capture_2026": 0.01, "capture_2030": 0.05, "capture_2035": 0.06, "stress_cattura": 1.0,
+        "km_per_ev_year": 12000, "kwh_per_100km": 18.0, "share_kwh_at_station": 0.25,
+    })
+else:
+    base_params.update({
+        "bev_target_2030": int(bev_target_2030),
+        "stress_bev": float(stress_bev),
+        "bev_start_ratio_2026": float(bev_start_ratio_2026),
+        "bev_growth_2035_vs_2030": float(bev_growth_2035_vs_2030),
+        "public_share": float(public_share),
+        "capture_2026": float(capture_2026),
+        "capture_2030": float(capture_2030),
+        "capture_2035": float(capture_2035),
+        "stress_cattura": float(stress_cattura),
+        "km_per_ev_year": float(km_per_ev_year),
+        "kwh_per_100km": float(kwh_per_100km),
+        "share_kwh_at_station": float(share_kwh_at_station),
+
+        # placeholders bottom-up
+        "traffic_veicoli_giorno": 0, "traffic_growth": 0.0, "ingress_rate": 0.03,
+        "ev_share_2026": 0.02, "ev_share_2030": 0.10, "ev_share_2035": 0.18,
+        "conversione_ricarica": 0.08,
+        "competitor_factor": 1.0,
+        "prezzo_mercato_ref": float(prezzo_kwh),
+        "price_elasticity": 0.0,
+    })
+
+# ============================================================
+# Run
+# ============================================================
+out = run_model(base_params)
+df = out["df"]
+
+fy = focus_year if focus_year in df.index else int(df.index.max())
+r = df.loc[fy]
+
+# ============================================================
+# Semaforo decisionale (semplice)
+# ============================================================
+payback_ok = np.isfinite(out["payback_year"]) and (out["payback_year"] <= fy + max_payback_years - (fy - years[0]))
+# per semplicità confronto payback (anno) contro "inizio + max"
+payback_ok = np.isfinite(out["payback_year"]) and (out["payback_year"] <= years[0] + max_payback_years)
+
+lost_ok = (r["Vendite Perse %"] <= max_lost_sales_pct) if np.isfinite(r["Vendite Perse %"]) else False
+roi_ok = np.isfinite(out["simple_roi"]) and (out["simple_roi"] * 100 >= min_roi_pct)
+
+score = sum([payback_ok, lost_ok, roi_ok])
+
+st.subheader("🚦 Decisione (semaforo)")
+if score == 3:
+    st.success("VERDE — Caso robusto: rientro accettabile, ROI ok, colli di bottiglia sotto controllo.")
+elif score == 2:
+    st.warning("GIALLO — Caso borderline: funziona, ma serve ottimizzare (prezzo/costi/capacità) o validare domanda.")
+else:
+    st.error("ROSSO — Caso debole: o non rientra, o ROI troppo basso, o perdi troppi clienti per vincoli.")
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Investimento totale (CAPEX)", eur(out["total_capex"]))
+c2.metric("Fatturato totale (10 anni)", eur(out["total_revenue"]))
+c3.metric("ROI semplice (10 anni)", f"{out['simple_roi']*100:.0f}%" if np.isfinite(out["simple_roi"]) else "n/a")
+c4.metric("Payback (anno)", f"{out['payback_year']:.1f}" if np.isfinite(out["payback_year"]) else "n/a")
+
+st.caption("ROI semplice = (cassa operativa cumulata − CAPEX) / CAPEX. È un indicatore 'manager-friendly'. I dettagli CFO sono sotto.")
+
+st.divider()
+
+# ============================================================
+# Cruscotto decisionale: 4 grafici chiarissimi
+# ============================================================
+st.subheader("📊 Cruscotto (capire subito cosa succede)")
+
+# 1) ricariche/giorno + break-even
+st.write("### 1) Ricariche/giorno: previste vs soglia (break-even)")
+sessions_day_series = (df["Sessioni Servite"] / 365.0).values
+
+# break-even per unità (anno focus)
+units_year = max(int(r["Unità Tot"]), 1)
+energy_cost_y = r["Energia Servita (kWh)"] * r["Costo energia (€/kWh)"]
+payment_fees_y = r["Fatturato ricarica (€)"] * payment_fee_pct
+opex_total_y = r["Fatturato Tot (€)"] - energy_cost_y - payment_fees_y - r["EBITDA (€)"]
+
+fixed_per_unit_day = (opex_total_y / units_year) / 365.0
+amort_per_unit_day = (capex_unit / max(depr_years, 1)) / 365.0
+
+t_idx = int(fy - years[0])
+anc_session = ancillary_margin_per_session * ((1 + inflation) ** t_idx)
+margin_per_kwh_net = r["Prezzo (€/kWh)"] - r["Costo energia (€/kWh)"] - r["Prezzo (€/kWh)"] * payment_fee_pct
+margin_session = kwh_per_session * margin_per_kwh_net + anc_session
+
+be_sessions_day = (fixed_per_unit_day + amort_per_unit_day) / margin_session if margin_session > 0 else np.nan
+
+fig, ax = plt.subplots()
+ax.plot(df.index, sessions_day_series, marker="o", linewidth=3, label="Ricariche/giorno (servite)")
+if np.isfinite(be_sessions_day):
+    ax.axhline(be_sessions_day, linestyle="--", linewidth=2, label=f"Soglia break-even ≈ {be_sessions_day:.1f}/g")
+ax.set_xlabel("Anno")
+ax.set_ylabel("Ricariche/giorno")
+ax.legend()
+st.pyplot(fig)
+
+if np.isfinite(be_sessions_day):
+    if (r["Sessioni Servite"]/365.0) >= be_sessions_day:
+        st.success(f"Nel {fy} sei SOPRA soglia: {r['Sessioni Servite']/365.0:.1f} vs {be_sessions_day:.1f} ricariche/giorno.")
+    else:
+        st.warning(f"Nel {fy} sei SOTTO soglia: {r['Sessioni Servite']/365.0:.1f} vs {be_sessions_day:.1f}.")
+else:
+    st.error("Break-even non calcolabile: margine per sessione ≤ 0 (prezzo troppo basso o costi troppo alti).")
+
+st.divider()
+
+# 2) colli di bottiglia: domanda vs servito + vendite perse %
+st.write("### 2) Colli di bottiglia: domanda vs servito (e vendite perse)")
+fig, ax = plt.subplots()
+ax.plot(df.index, df["Sessioni Domanda"], marker="o", linewidth=3, label="Domanda (sessioni/anno)")
+ax.plot(df.index, df["Sessioni Servite"], marker="o", linewidth=3, label="Servite (sessioni/anno)")
+ax.fill_between(df.index, df["Sessioni Servite"], df["Sessioni Domanda"],
+                where=(df["Sessioni Domanda"] > df["Sessioni Servite"]), alpha=0.2)
+ax.set_xlabel("Anno")
+ax.set_ylabel("Sessioni/anno")
+ax.legend()
+st.pyplot(fig)
+
+fig2, ax2 = plt.subplots()
+ax2.plot(df.index, df["Vendite Perse %"], marker="o", linewidth=3)
+ax2.axhline(max_lost_sales_pct, linestyle="--", linewidth=1)
+ax2.set_xlabel("Anno")
+ax2.set_ylabel("Vendite perse (%)")
+st.pyplot(fig2)
+
+st.info("Se le vendite perse sono alte, il collo di bottiglia è capacità/potenza/ore/uptime. "
+        "Riduci code aumentando unità, potenza disponibile, ore operative o migliorando uptime/turnover.")
+
+st.divider()
+
+# 3) Piano unità (quante e quando)
+st.write("### 3) Piano installazioni: quante unità servono e quando")
+fig, ax = plt.subplots()
+ax.bar(df.index, df["Unità A"], label="Sito A")
+ax.bar(df.index, df["Unità B"], bottom=df["Unità A"], label="Sito B")
+ax.set_xlabel("Anno")
+ax.set_ylabel("Unità installate")
+ax.legend()
+st.pyplot(fig)
+
+st.caption("Se il grafico 'si ferma' ma la domanda cresce, hai un vincolo (max unità o potenza disponibile).")
+
+st.divider()
+
+# 4) Investimento e ritorno (cassa cumulata + fatturato)
+st.write("### 4) Investimento e ritorno: quando recupero e quanto fatturo")
+cum_annual = out["cum_annual"]
+fig, ax = plt.subplots()
+ax.plot(df.index, cum_annual, marker="o", linewidth=3)
+ax.axhline(0, linewidth=1)
+ax.set_xlabel("Anno")
+ax.set_ylabel("Cassa cumulata (OPCF - CAPEX) €")
+st.pyplot(fig)
+
+if np.isfinite(out["payback_year"]):
+    st.success(f"Payback stimato intorno al: **{out['payback_year']:.1f}**.")
+else:
+    st.warning("Payback non raggiunto nell’orizzonte: serve più domanda/margine o meno CAPEX/OPEX.")
+
+fig, ax = plt.subplots()
+ax.plot(df.index, df["Fatturato Tot (€)"], marker="o", linewidth=3)
+ax.set_xlabel("Anno")
+ax.set_ylabel("Fatturato annuo (€)")
+st.pyplot(fig)
+
+st.divider()
+
+# ============================================================
+# “Spiegazione in una riga” dei colli di bottiglia
+# ============================================================
+st.subheader("🔎 Diagnosi colli di bottiglia (spiegata)")
+bottlenecks = []
+if r["Vendite Perse %"] > max_lost_sales_pct:
+    bottlenecks.append("❗ Capacità insufficiente → stai perdendo clienti (aumenta unità/potenza/ore o riduci durata sessione/overhead).")
+if potenza_disponibile_kw > 0:
+    potenza_kw = 30 if tecnologia == "DC 30 kW" else 60
+    max_by_grid = int(np.floor(potenza_disponibile_kw / potenza_kw))
+    if max_by_grid < max_units_installabili:
+        bottlenecks.append("⚠️ Vincolo rete/potenza disponibile → limita il numero massimo di unità installabili.")
+if max_units_installabili <= 2 and r["Sessioni Domanda"] > r["Sessioni Servite"]:
+    bottlenecks.append("⚠️ Vincolo spazio/permessi → limita la crescita, valuta multisito o layout diverso.")
+if margin_session <= 0:
+    bottlenecks.append("❗ Margine per sessione ≤ 0 → il modello non sta in piedi (rivedi prezzo, costo energia, fee, ancillary).")
+
+if not bottlenecks:
+    st.success("Nessun collo di bottiglia evidente nel focus: domanda servita e margini coerenti con le soglie impostate.")
+else:
+    for b in bottlenecks:
+        st.write(b)
+
+# ============================================================
+# CFO details (facoltativi, in expander)
+# ============================================================
+with st.expander("🏦 Dettagli CFO (NPV/IRR) — opzionale"):
+    colA, colB, colC = st.columns(3)
+    colA.metric("NPV (VAN)", eur(out["npv"]))
+    colB.metric("IRR (TIR)", pct(out["irr"]))
+    colC.metric("Valore residuo (fine)", eur(out["residual_value"]))
+
+# ============================================================
+# Tabella (dettaglio)
+# ============================================================
+with st.expander("📋 Tabella completa (dettaglio)", expanded=False):
+    st.dataframe(df.style.format({
+        "Sessioni Domanda": "{:,.0f}",
+        "Sessioni Servite": "{:,.0f}",
+        "Sessioni Perse": "{:,.0f}",
+        "Energia Domanda (kWh)": "{:,.0f}",
+        "Energia Servita (kWh)": "{:,.0f}",
+        "Energia Persa (kWh)": "{:,.0f}",
+        "Fatturato ricarica (€)": "{:,.0f}",
+        "Fatturato extra (€)": "{:,.0f}",
+        "Fatturato Tot (€)": "{:,.0f}",
+        "EBITDA (€)": "{:,.0f}",
+        "CAPEX (€)": "{:,.0f}",
+        "OPCF after WC (€)": "{:,.0f}",
+        "Net Cash (€/anno)": "{:,.0f}",
+        "Vendite Perse %": "{:.1f}",
+        "Utilizzo %": "{:.1f}",
+        "Prezzo (€/kWh)": "{:.3f}",
+        "Costo energia (€/kWh)": "{:.3f}",
+    }))
