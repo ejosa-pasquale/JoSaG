@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy_financial as npf
 import io
 
-st.set_page_config(page_title="Executive Charging Suite — Sicilia (Palermo)", layout="wide")
+st.set_page_config(page_title="Executive Charging Suite — Sicilia - eVFSs", layout="wide")
 
 # ============================================================
 # DATI BEV SICILIA (2015–2024) — SORGENTE: input utente
@@ -100,8 +100,8 @@ def forecast_bev_2030(df_hist, province, method="CAGR 2021–2024"):
 # ============================================================
 # HEADER
 # ============================================================
-st.title("🛡️ Executive Support System — Ricarica DC (Sicilia / Palermo)")
-st.markdown("### *Tool manager-friendly + modalità CFO: investimento, fatturato, ROI e colli di bottiglia.*")
+st.title("🛡️ Executive Planning Tool — Fast DC - Service Stations")
+st.markdown("### eV Field Service ")
 
 # ============================================================
 # SIDEBAR — DATI TERRITORIO + FUNNEL
@@ -662,3 +662,289 @@ with st.expander("📚 Intelligence Report (spiegazioni + limiti + allineamento 
 - In modalità **CFO** aggiungiamo: tasse, WC, fee roaming, canoni potenza, scenari e tornado (investment-grade).
         """
     )
+# =============================
+# SEZIONE 6 — COMPETITOR 5 KM (OSM / OVERPASS - NO API KEY)
+# =============================
+import requests
+import pandas as pd
+import numpy as np
+import streamlit as st
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dlambda = np.radians(lon2 - lon1)
+    a = np.sin(dphi/2)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(dlambda/2)**2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+@st.cache_data(ttl=60*60)
+def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
+    """
+    Cerca stazioni di ricarica (amenity=charging_station) entro radius_km.
+    Ritorna (ok: bool, df: DataFrame, err: str|None)
+    """
+    radius_m = int(radius_km * 1000)
+
+    # Query Overpass: nodi + ways + relations
+    # NOTA: out center serve per ways/relations
+    query = f"""
+    [out:json][timeout:25];
+    (
+      node["amenity"="charging_station"](around:{radius_m},{lat},{lon});
+      way["amenity"="charging_station"](around:{radius_m},{lat},{lon});
+      relation["amenity"="charging_station"](around:{radius_m},{lat},{lon});
+    );
+    out center tags;
+    """
+
+    url = "https://overpass-api.de/api/interpreter"
+    headers = {
+        # User-Agent "gentile" (riduce chance di blocco)
+        "User-Agent": "palermo-charging-suite/1.0 (contact: you@example.com)"
+    }
+
+    try:
+        r = requests.post(url, data=query.encode("utf-8"), headers=headers, timeout=35)
+    except requests.exceptions.RequestException as e:
+        return False, pd.DataFrame(), f"Errore rete/timeout Overpass: {e}"
+
+    if r.status_code != 200:
+        txt = (r.text or "").strip()
+        if len(txt) > 800:
+            txt = txt[:800] + "…"
+        return False, pd.DataFrame(), f"HTTP {r.status_code} da Overpass: {txt}"
+
+    try:
+        data = r.json()
+    except ValueError:
+        return False, pd.DataFrame(), "Risposta Overpass non-JSON (endpoint instabile)."
+
+    elements = data.get("elements", [])
+    rows = []
+    for el in elements:
+        tags = el.get("tags", {}) or {}
+
+        # coordinate: node => lat/lon; ways/relations => center
+        if el.get("type") == "node":
+            lat2 = el.get("lat")
+            lon2 = el.get("lon")
+        else:
+            center = el.get("center", {}) or {}
+            lat2 = center.get("lat")
+            lon2 = center.get("lon")
+
+        if lat2 is None or lon2 is None:
+            continue
+
+        dist = float(haversine_km(lat, lon, lat2, lon2))
+
+        # Metadati utili quando disponibili
+        name = tags.get("name", "charging_station")
+        operator = tags.get("operator", "")
+        capacity = tags.get("capacity", "")
+        access = tags.get("access", "")
+        # a volte compaiono socket tags: socket:type2, socket:chademo, socket:ccs...
+        sockets = [k for k in tags.keys() if k.startswith("socket:")]
+
+        rows.append({
+            "Nome": name,
+            "Operatore": operator,
+            "Capacity_tag": capacity,
+            "Access": access,
+            "Socket_tags_presenti": ", ".join(sockets[:6]) if sockets else "",
+            "Distanza_km": dist,
+            "Lat": float(lat2),
+            "Lon": float(lon2),
+            "OSM_type": el.get("type"),
+            "OSM_id": el.get("id"),
+        })
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("Distanza_km")
+    return True, df, None
+
+def competition_factor_osm(df_poi):
+    """
+    Moltiplicatore 'soft' (0.60–1.00) basato su:
+    - n. stazioni nel raggio
+    - distanza del competitor più vicino
+    (OSM spesso non ha potenza: qui non usiamo kW)
+    """
+    if df_poi is None or df_poi.empty:
+        return 1.00, {"n_sites": 0, "nearest_km": None}
+
+    n_sites = int(len(df_poi))
+    nearest_km = float(df_poi["Distanza_km"].min())
+
+    # penalità “morbida” (tarabile)
+    pen = 0.00
+    pen += min(0.30, 0.02 * n_sites)                 # fino a -30% per densità
+    pen += min(0.15, 0.10 * max(0, (2.0 - nearest_km)))  # vicino <2 km fino a -15%
+
+    factor = max(0.60, 1.00 - pen)
+    meta = {"n_sites": n_sites, "nearest_km": nearest_km}
+    return factor, meta
+
+# -----------------------------
+# UI
+# -----------------------------
+st.divider()
+st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (OSM/Overpass, 5 km periurbano)")
+
+with st.expander("Impostazioni prossimità", expanded=True):
+    site_lat = st.number_input("Latitudine sito", value=38.1157, format="%.6f")
+    site_lon = st.number_input("Longitudine sito", value=13.3615, format="%.6f")
+    apply_to_capture = st.checkbox("Usa fattore competizione (OSM) per correggere quota cattura", value=True)
+    run_prox = st.button("Esegui analisi prossimità (5 km)")
+
+if run_prox:
+    ok, df_poi, err = fetch_osm_chargers_overpass(site_lat, site_lon, radius_km=5)
+
+    if not ok:
+        st.error("Impossibile interrogare Overpass (OSM).")
+        st.code(err, language="text")
+        st.info("Suggerimento: Overpass può essere lento o rate-limited. Riprova tra 1-2 minuti.")
+    else:
+        if df_poi.empty:
+            st.warning("Nessuna charging_station OSM trovata entro 5 km (oppure dati OSM incompleti).")
+            st.session_state["competition_factor"] = 1.0
+            st.session_state["competitors_5km"] = df_poi
+        else:
+            factor, meta = competition_factor_osm(df_poi)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Stazioni nel raggio (5 km)", f"{meta['n_sites']}")
+            c2.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
+            c3.metric("Fattore competizione (OSM)", f"{factor:.2f}x")
+
+            # Mappa semplice (no pydeck)
+            map_site = pd.DataFrame([{"lat": site_lat, "lon": site_lon}])
+            map_comp = df_poi.rename(columns={"Lat": "lat", "Lon": "lon"})[["lat", "lon"]]
+            st.map(pd.concat([map_site, map_comp], ignore_index=True))
+
+            st.caption("Dettaglio punti (OSM amenity=charging_station)")
+            st.dataframe(df_poi, use_container_width=True)
+
+            # Output per il modello
+            st.session_state["competition_factor"] = float(factor)
+            st.session_state["competitors_5km"] = df_poi
+
+            if apply_to_capture:
+                st.success("Fattore competizione pronto. Applicalo alla quota cattura PRIMA del funnel (vedi nota).")
+            else:
+                st.info("Fattore non applicato: sezione solo informativa.")
+
+            st.markdown(
+                """
+**Nota integrazione nel modello (1 riga):**
+Applica questo moltiplicatore **prima** del calcolo energia/funnel:
+`quota_stazione_eff = quota_stazione * st.session_state.get("competition_factor", 1.0)`
+                """
+            )
+
+
+# ============================================================
+# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
+# ============================================================
+st.divider()
+st.subheader("📊 Sezione 7 — Decision Making: Conviene installare qui?")
+
+# --- Assunzioni standard di settore
+MODULE_KW = 30
+MODULE_COST = 20_000
+UPTIME = 0.97
+EFFICIENCY = 0.95
+ANTI_QUEUE_SAT = 0.80
+
+avg_kwh_session = st.number_input("kWh medi per sessione", value=28.0)
+price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
+energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
+opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
+
+# --- Domanda stimata (auto target giornaliere)
+capture_rate = st.slider("Quota cattura % del parco BEV locale", 0.5, 10.0, 3.0) / 100
+sessions_per_car_year = 45
+
+cars_target_daily = (bev_2024 * capture_rate * sessions_per_car_year) / 365
+
+# --- Capacità per modulo
+hours_day = 24 * UPTIME
+kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
+sessions_day_per_module = kwh_day_per_module / avg_kwh_session
+
+modules_needed = int(np.ceil(cars_target_daily / sessions_day_per_module))
+modules_needed = max(1, modules_needed)
+
+capex = modules_needed * MODULE_COST
+
+# --- Saturazione asset
+asset_saturation = cars_target_daily / (sessions_day_per_module * modules_needed)
+
+# --- Economics
+revenue_session = avg_kwh_session * price_kwh
+cost_session = avg_kwh_session * energy_cost
+margin_session = revenue_session - cost_session
+
+sessions_year = cars_target_daily * 365
+ebitda = sessions_year * margin_session - opex_annual
+cash_flow = ebitda - capex
+
+# --- Output chiave
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Moduli 30 kW necessari", modules_needed)
+c2.metric("CAPEX Totale", eur(capex))
+c3.metric("Saturazione Asset", pct(asset_saturation))
+c4.metric("EBITDA Annuo", eur(ebitda))
+
+decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
+st.markdown(f"### Decisione: **{decision}**")
+
+# ============================================================
+# SEZIONE 8 — Executive Investment Summary
+# ============================================================
+st.subheader("📈 Executive Investment Summary")
+
+years = list(range(2024, 2031))
+cum_cf = 0
+rows = []
+
+for y in years:
+    growth_factor = (1 + cagr_used) ** (y - 2024)
+    cars_y = cars_target_daily * growth_factor
+    sessions_y = cars_y * 365
+    ebitda_y = sessions_y * margin_session - opex_annual
+    cum_cf += ebitda_y - (capex if y == 2024 else 0)
+
+    rows.append({
+        "Anno": y,
+        "Auto target giornaliere": round(cars_y, 1),
+        "Moduli 30kW": modules_needed,
+        "Saturazione Asset %": asset_saturation,
+        "EBITDA": ebitda_y,
+        "CAPEX": capex if y == 2024 else 0,
+        "Cash Flow Cumulato": cum_cf
+    })
+
+df_exec = pd.DataFrame(rows)
+df_exec["Saturazione Asset %"] = df_exec["Saturazione Asset %"].apply(pct)
+df_exec["EBITDA"] = df_exec["EBITDA"].apply(eur)
+df_exec["CAPEX"] = df_exec["CAPEX"].apply(eur)
+df_exec["Cash Flow Cumulato"] = df_exec["Cash Flow Cumulato"].apply(eur)
+
+st.dataframe(df_exec, use_container_width=True)
+
+# ============================================================
+# SEZIONE 9 — Business Driver
+# ============================================================
+st.subheader("🧮 Business Driver")
+
+breakeven_sessions_day = opex_annual / (margin_session * 365)
+
+bd = pd.DataFrame({
+    "Indicatore": ["Margine per Sessione", "Punto di Pareggio (ricariche/giorno)"],
+    "Valore": [eur(margin_session), round(breakeven_sessions_day, 1)]
+})
+
+st.table(bd)
