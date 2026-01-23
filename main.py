@@ -481,7 +481,7 @@ capacita_tot_kwh_anno = n_totale * capacita_unit_kwh_anno
 st.write("**5B. Colli di bottiglia: domanda target vs capacità installata (quando serve espandere)**")
 
 fig5b, ax = plt.subplots()
-plot_line(ax, years, energia_target_kwh/1e6, "Domanda target (GWh/anno)\")
+plot_line(ax, years, energia_target_kwh/1e6, "Domanda target (GWh/anno)")
 plot_line(ax, years, capacita_tot_kwh_anno/1e6, \"Capacità installata (GWh/anno)\")
 
 over = energia_target_kwh > capacita_tot_kwh_anno
