@@ -352,6 +352,86 @@ with col_d2:
 # ============================================================
 st.subheader(f"📌 Executive Summary — {province} | {tecnologia}")
 
+# --- DECISIONE (kWh-based): conviene? quante unità? piano per anno ---
+P_netto = prezzo_kwh * (1 - fee_roaming)  # €/kWh incassati (netto fee)
+margine_kwh_exec = P_netto - costo_kwh   # €/kWh
+opex_day_unit = opex_unit / 365.0
+amm_day_unit = (capex_unit / max(ammortamento_anni, 1e-9)) / 365.0
+canone_pot_day_unit = (canone_potenza * potenza_kw) / 365.0
+costo_fisso_day_unit = opex_day_unit + amm_day_unit + canone_pot_day_unit
+
+kwh_be_day_unit = costo_fisso_day_unit / max(margine_kwh_exec, 1e-9)  # kWh/giorno per unità
+kwh_day_tot = energia_kwh / 365.0                                     # kWh/giorno totali stazione (domanda catturata)
+kwh_day_pub = energia_pubblica_kwh / 365.0                             # kWh/giorno bacino pubblico
+
+# capacità giornaliera (anti-coda) per unità — usata solo come check operativo
+cap_kwh_day_unit = potenza_kw * ore_max_giorno * uptime * saturazione_target
+
+# quante unità "convengono" (massimo numero che resta sopra BE se la domanda si divide in modo uniforme)
+n_profit_max = np.floor(kwh_day_tot / max(kwh_be_day_unit, 1e-9)).astype(int)
+n_profit_max = np.maximum(n_profit_max, 0)
+
+# quante unità "servirebbero" per servire tutto il kWh/giorno senza superare capacità target (anti-coda)
+n_cap_min = np.ceil(kwh_day_tot / max(cap_kwh_day_unit, 1e-9)).astype(int)
+n_cap_min = np.maximum(n_cap_min, 0)
+
+# Raccomandazione per anno: installa fino a n_profit_max (se 0 => non conviene)
+n_rec = n_profit_max.copy()
+
+# Sintesi: primo anno e ultimo anno
+conviene_2026 = (kwh_day_tot[0] >= kwh_be_day_unit) and (margine_kwh_exec > 0)
+conviene_2030 = (kwh_day_tot[-1] >= kwh_be_day_unit) and (margine_kwh_exec > 0)
+
+# Tabella anno per anno (decisione)
+df_decision = pd.DataFrame({
+    "Anno": years.astype(int),
+    "Bacino pubblico (kWh/g)": np.round(kwh_day_pub, 0),
+    "Target cattura (kWh/g)": np.round(kwh_day_tot, 0),
+    "BE per unità (kWh/g)": np.round(np.repeat(kwh_be_day_unit, len(years)), 0),
+    "Max unità che convengono (profit)": n_profit_max,
+    "Min unità per capacità (anti-coda)": n_cap_min,
+})
+
+
+# ---- Executive, subito: parametri finanziari + raccomandazione ----
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Prezzo netto (€/kWh)", f"{P_netto:.2f}")
+m2.metric("Costo energia (€/kWh)", f"{costo_kwh:.2f}")
+m3.metric("Margine (€/kWh)", f"{margine_kwh_exec:.2f}")
+m4.metric("BE per unità", f"{kwh_be_day_unit:.0f} kWh/g")
+m5.metric("Conviene installare?", "SÌ (2026)" if conviene_2026 else "NO (2026)")
+
+st.caption(
+    "Decisione basata su **kWh/giorno per unità**: se il target cattura (kWh/g) per unità supera il BE, l’unità 'sta in piedi'. "
+    "La colonna 'Max unità che convengono' ti dice quante installarne (economicamente) in ciascun anno."
+)
+
+# Piano per anno (solo se serve più di 1 unità)
+if int(n_rec.max()) > 1:
+    # segmentazione per anno: periodi con stesso numero di unità consigliate
+    segments = []
+    cur_n = int(n_rec[0])
+    start_y = int(years[0])
+    for i in range(1, len(years)):
+        if int(n_rec[i]) != cur_n:
+            segments.append((start_y, int(years[i-1]), cur_n))
+            cur_n = int(n_rec[i])
+            start_y = int(years[i])
+    segments.append((start_y, int(years[-1]), cur_n))
+
+    seg_txt = []
+    for a, b, n in segments:
+        if n <= 0:
+            continue
+        if a == b:
+            seg_txt.append(f"• {a}: **{n}** unità")
+        else:
+            seg_txt.append(f"• {a}–{b}: **{n}** unità")
+    if seg_txt:
+        st.info("📅 Piano consigliato (segmentazione per anno):\n" + "\n".join(seg_txt))
+
+st.dataframe(df_decision, use_container_width=True)
+
 # --- CAPEX anno per anno (stile budgeting) ---
 capex_years = years[:3] if len(years) >= 3 else years
 capex_vals = capex_flow[:len(capex_years)]
@@ -407,9 +487,9 @@ with c1:
     st.pyplot(fig1)
 
     st.markdown(r"""
-
-""")
-
+**Formula (operativa)**
+- $kWh_{BE/day} = \frac{OPEX_{day} + Amm_{day} + CanonePot_{day}}{P_{netto} - C_{energia}}$
+- (opz.) $Sessioni_{BE/day} = \frac{kWh_{BE/day}}{kWh_{sess}}$
 """)
 
 st.markdown(
@@ -503,47 +583,45 @@ with c4:
     """)
 
 # ============================================================
-# 5) Capacità 1 unità vs domanda città + target cattura (e indicatore "quando non basta")
+# 5) Capacità 1 unità vs domanda città + target cattura (KWH-based)
 # ============================================================
 st.divider()
-st.subheader("5) Domanda in crescita e target cattura: **1 unità basta?**")
+st.subheader("5) Domanda in crescita e target cattura: **1 unità basta?** (kWh)")
 
 st.caption(
-    f"Questa sezione confronta: **bacino pubblico** (BEV×quota pubblica), **target cattura** e la **capacità di 1 unità {tecnologia}**."
+    f"Confronto **bacino pubblico (kWh/anno)**, **target cattura (kWh/anno)** e **capacità di 1 unità {tecnologia} (kWh/anno)**."
 )
 
-# capacità 1 unità in auto equivalenti (stile PDF: kWh/anno -> auto/anno)
-cap_unit_kwh = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
-cap_unit_auto_eq = cap_unit_kwh / kwh_annui_per_auto
-units_needed_for_target = np.where(cap_unit_auto_eq > 0, auto_clienti_anno / cap_unit_auto_eq, np.nan)
-
-bev_pubbliche = bev_citta * public_share
+# Capacità 1 unità (kWh/anno)
+cap_unit_kwh = potenza_kw * 8760 * uptime * utilizzo_medio_annuo  # stile PDF: kW×8760×uptime×utilizzo
+units_needed_for_target = np.where(cap_unit_kwh > 0, energia_kwh / cap_unit_kwh, np.nan)
 
 col5a, col5b = st.columns(2)
 with col5a:
-    st.write("**5A) Bacino pubblico vs target**")
+    st.write("**5A) Bacino pubblico vs target (kWh/anno)**")
     fig, ax = plt.subplots()
-    ax.plot(years, bev_pubbliche, marker="o", linewidth=3, label="BEV domanda pubblica (proxy)")
-    ax.plot(years, auto_clienti_anno, marker="o", linewidth=3, label="Target cattura (auto/anno)")
+    ax.plot(years, energia_pubblica_kwh, marker="o", linewidth=3, label="Bacino pubblico (kWh/anno)")
+    ax.plot(years, energia_kwh, marker="o", linewidth=3, label="Target cattura stazione (kWh/anno)")
     ax.set_xlabel("Anno")
-    ax.set_ylabel("Auto/anno")
+    ax.set_ylabel("kWh/anno")
     ax.legend()
     st.pyplot(fig)
 
     st.markdown(rf"""
-**Interpretazione**
-- Se il bacino pubblico cresce ma il target resta basso, non è un limite di mercato ma di strategia (cattura).
-- Il target dipende da location, competizione, servizi, prezzo percepito.
+**Interpretazione (kWh)**
+- Il **bacino pubblico** è la quota di energia BEV che passa dal pubblico: $E_{{pub}} = E_{{BEV}}\cdot quota_{{pub}}$.
+- Il **target** è l’energia che ti aspetti di catturare: $E_{{target}} = E_{{pub}}\cdot quota_{{stazione}}$.
 
-**Con input attuali**
-- Bacino pubblico 2030 ≈ **{bev_pubbliche[-1]:,.0f} auto**
-- Target 2030 ≈ **{auto_clienti_anno[-1]:,.0f} auto** (≈ **{(auto_clienti_anno[-1]/max(bev_pubbliche[-1],1e-9))*100:.1f}%** del bacino)
+**Con input attuali (2030)**
+- Bacino pubblico 2030 ≈ **{energia_pubblica_kwh[-1]:,.0f} kWh/anno**
+- Target 2030 ≈ **{energia_kwh[-1]:,.0f} kWh/anno** (≈ **{(energia_kwh[-1]/max(energia_pubblica_kwh[-1],1e-9))*100:.1f}%** del bacino)
+- (Solo reporting) “auto equivalenti” 2030 ≈ **{auto_clienti_anno[-1]:,.0f}**
     """.replace(",", "."))
 
 with col5b:
     st.write("**5B) Quante unità servono per servire il target? (soglia=1)**")
     fig, ax = plt.subplots()
-    ax.plot(years, units_needed_for_target, marker="o", linewidth=3, label="Unità necessarie (equivalenti)")
+    ax.plot(years, units_needed_for_target, marker="o", linewidth=3, label="Unità necessarie (kWh-based)")
     ax.axhline(1, linestyle="--", linewidth=1)
     ax.set_xlabel("Anno")
     ax.set_ylabel("Unità richieste")
@@ -551,27 +629,25 @@ with col5b:
     st.pyplot(fig)
 
     st.markdown(rf"""
-**Capacità 1 unità (stile PDF)**
+**Capacità 1 unità (kWh/anno)**
 - $kWh_{{unit,anno}} = {potenza_kw}\cdot 8760 \cdot {uptime:.2f} \cdot {utilizzo_medio_annuo:.2f} \approx {cap_unit_kwh:,.0f}$
-- Auto equivalenti/anno: **{cap_unit_auto_eq:,.0f} auto**
 
 **Come leggere**
-- Se la linea supera 1 → **1 unità non basta** per il target.
-- L’anno in cui supera 1 è un ottimo **indicatore decisionale** (quando servono 2 unità).
+- Se la linea supera 1 → **1 unità non basta** per il target energetico.
+- L’anno in cui supera 1 è un ottimo **indicatore decisionale** (quando serve installare la 2ª unità).
     """.replace(",", "."))
 
 # Indicatore: primo anno in cui 1 unità non basta
 anno_non_basta = None
 for i, y in enumerate(years):
-    if units_needed_for_target[i] > 1:
+    if np.isfinite(units_needed_for_target[i]) and units_needed_for_target[i] > 1:
         anno_non_basta = int(y)
         break
 
 if anno_non_basta:
     st.warning(f"📌 Indicatore: con gli input attuali, **1 unità non basta a partire dal {anno_non_basta}** (servono ≥ 2 unità).")
 else:
-    st.success("📌 Indicatore: con gli input attuali, **1 unità basta** per tutto l’orizzonte 2026–2030.")
-
+    st.success("📌 Indicatore: con gli input attuali, **1 unità basta** per il target energetico su tutto l’orizzonte.")
 # ============================================================
 # 6) Modalità CFO: scenari Base/Bear/Bull + Tornado
 # ============================================================
