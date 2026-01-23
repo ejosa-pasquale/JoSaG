@@ -408,9 +408,11 @@ with c1:
 
     st.markdown(r"""
 **Formula (operativa)**
+st.latex(r"""
 kWh_{\text{BE,day}} =
 \frac{OPEX_{\text{day}} + Amm_{\text{day}} + CanonePot_{\text{day}}}
 {P_{\text{netto}} - C_{\text{energia}}}
+""")
 
 """)
 
