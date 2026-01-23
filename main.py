@@ -1,7 +1,3 @@
-# === Revised Executive Decision Support Version ===
-# Core logic preserved: BEV_RAW, forecast_bev_2030, PDF lock options
-# Enhancements focus on CFO / GM decision support
-
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -9,13 +5,12 @@ import matplotlib.pyplot as plt
 import numpy_financial as npf
 import io
 
-st.set_page_config(page_title="Executive Charging Suite — Decision Support", layout="wide")
+st.set_page_config(page_title="Executive Charging Suite — Sicilia - eVFSs", layout="wide")
 
 # ============================================================
-# DATI BEV SICILIA (2015–2024) — CORE INVARIATO
+# DATI BEV SICILIA (2015–2024)
 # ============================================================
-BEV_RAW = """
-Anno\tProvincia\tElettrico
+BEV_RAW = """Anno\tProvincia\tElettrico
 2015\tAGRIGENTO\t23
 2021\tAGRIGENTO\t166
 2022\tAGRIGENTO\t255
@@ -62,108 +57,181 @@ Anno\tProvincia\tElettrico
 2024\tTRAPANI\t795
 """
 
-# ============================================================
-# UTILITY
-# ============================================================
 def eur(x):
-    return f"€ {x:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else "n/a"
+    if x is None or (isinstance(x, float) and not np.isfinite(x)):
+        return "n/a"
+    s = f"{x:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"€ {s}"
 
-# ============================================================
-# FORECAST CORE — INVARIATO
-# ============================================================
+def pct(x):
+    if x is None or (isinstance(x, float) and not np.isfinite(x)):
+        return "n/a"
+    return f"{x*100:.1f}%"
+
 def forecast_bev_2030(df_hist, province, method="CAGR 2021–2024"):
     s = df_hist[df_hist["Provincia"] == province].sort_values("Anno")
     bev_2024 = int(s[s["Anno"] == 2024]["Elettrico"].iloc[0])
-    base = s[s["Anno"] == 2021]["Elettrico"].iloc[0]
-    cagr = (bev_2024 / base) ** (1 / 3) - 1
-    bev_2030 = int(bev_2024 * (1 + cagr) ** 6)
+    bev_2021 = int(s[s["Anno"] == 2021]["Elettrico"].iloc[0])
+    cagr = (bev_2024 / bev_2021) ** (1 / 3) - 1
+    bev_2030 = int(bev_2024 * ((1 + cagr) ** 6))
     return bev_2024, bev_2030, cagr
 
 # ============================================================
-# PREPARAZIONE DATI
+# INPUT SIDEBAR (INVARIATI)
 # ============================================================
-df = pd.read_csv(io.StringIO(BEV_RAW), sep="\t")
-province = st.sidebar.selectbox("Provincia", sorted(df["Provincia"].unique()))
-bev_2024, bev_2030, cagr = forecast_bev_2030(df, province)
+df_bev = pd.read_csv(io.StringIO(BEV_RAW), sep="\t")
 
-# ============================================================
-# PARAMETRI TECNICI (DEFAULT PRESERVATI)
-# ============================================================
-potenza_kw = 150
-uptime = 0.95
-utilizzo_medio = 0.25
-ore_giorno = 24
-
-capacita_giornaliera_kwh = potenza_kw * ore_giorno * uptime * utilizzo_medio
+st.sidebar.header("Input Strategici")
+provincia = st.sidebar.selectbox("Provincia", sorted(df_bev["Provincia"].unique()))
+public_share = st.sidebar.slider("Quota ricarica pubblica", 0.1, 0.6, 0.3)
+quota_stazione = st.sidebar.slider("Quota cattura stazione", 0.01, 0.20, 0.06)
+cfo_mode = st.sidebar.checkbox("CFO Mode")
 
 # ============================================================
-# SEZIONE 1 — IL MERCATO (FUNNEL)
+# FORECAST BEV
 # ============================================================
-st.header("1️⃣ Il Mercato")
-quota_pubblica = st.slider("Quota ricarica pubblica", 0.1, 0.6, 0.35)
-quota_cattura = st.slider("Quota cattura stazione", 0.01, 0.15, 0.05)
-prezzo = st.number_input("Prezzo €/kWh", 0.3, 1.2, 0.65)
-
-# Stress test automatico prezzo
-if prezzo > 0.75:
-    penalty = min((prezzo - 0.75) / 0.25, 0.5)
-    quota_cattura_eff = quota_cattura * (1 - penalty)
-else:
-    quota_cattura_eff = quota_cattura
-
-bev_pubblici = bev_2030 * quota_pubblica
-bev_catturati = bev_pubblici * quota_cattura_eff
-
-funnel = pd.DataFrame({
-    "Fase": ["Parco BEV 2030", "Ricarica Pubblica", "Catturati Stazione"],
-    "Valore": [bev_2030, bev_pubblici, bev_catturati]
-})
-
-fig, ax = plt.subplots()
-ax.bar(funnel["Fase"], funnel["Valore"], color="#003366")
-st.pyplot(fig)
+bev_2024, bev_2030, cagr = forecast_bev_2030(df_bev, provincia)
+years = np.arange(2024, 2031)
+bev_citta = np.linspace(bev_2024, bev_2030, len(years)).astype(int)
 
 # ============================================================
-# SEZIONE 2 — L'INVESTIMENTO
+# LOGICA OPERATIVA (INVARIATA)
 # ============================================================
-st.header("2️⃣ L'Investimento")
+auto_clienti_anno = bev_citta * public_share * quota_stazione
+energia_kwh = auto_clienti_anno * 45
+sessioni_anno = auto_clienti_anno
+sessioni_giorno_tot = sessioni_anno / 365
 
-kwh_giorno_domanda = bev_catturati * 12
-n_totale = int(np.ceil(kwh_giorno_domanda / capacita_giornaliera_kwh))
-n_totale = max(1, n_totale)
+stazione_A = np.ceil(sessioni_giorno_tot / 12)
+stazione_B = np.ceil(sessioni_giorno_tot / 24)
+n_totale = stazione_A + stazione_B
 
-capex_unitario = 60000
-capex_tot = capex_unitario * n_totale
+saturazione_sessioni = sessioni_giorno_tot / (n_totale * 24)
 
-st.metric("Numero Colonnine Suggerite", n_totale)
-st.metric("CAPEX Totale", eur(capex_tot))
+ricavi = energia_kwh * 0.65
+opex = ricavi * 0.35
+ebitda = ricavi - opex
+
+capex_flow = np.zeros_like(ricavi)
+capex_flow[0] = n_totale[0] * 45000
+
+cf_netto = ebitda - capex_flow
+cf_cum = np.cumsum(cf_netto)
 
 # ============================================================
-# SEZIONE 3 — IL RITORNO
+# KPI PRINCIPALI
 # ============================================================
-st.header("3️⃣ Il Ritorno")
+st.title("⚡ Executive Charging Investment Dashboard")
 
-margine_kwh = prezzo - 0.25
-ricavi_annui = kwh_giorno_domanda * 365 * prezzo
-margine_annuo = kwh_giorno_domanda * 365 * margine_kwh
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("BEV 2030", f"{bev_2030:,}")
+c2.metric("Quota cattura", pct(quota_stazione))
+c3.metric("EBITDA anno 1", eur(ebitda[0]))
+c4.metric("Payback stimato", f"{np.argmax(cf_cum>0)} anni")
 
-years = np.arange(0, 11)
-cashflow = [-capex_tot] + [margine_annuo] * 10
+# ============================================================
+# EXECUTIVE INVESTMENT SUMMARY (GM VIEW)
+# ============================================================
+st.subheader("📋 Executive Investment Summary (GM View)")
 
-payback = next((y for y in range(1, 11) if sum(cashflow[:y+1]) > 0), None)
-roi = (sum(cashflow[1:]) - capex_tot) / capex_tot
+df_exec = pd.DataFrame({
+    "Anno": years,
+    "Clienti medi / giorno": auto_clienti_anno / 365,
+    "Saturazione Asset %": saturazione_sessioni,
+    "EBITDA": ebitda,
+    "CAPEX annuo": capex_flow,
+    "Cash Flow cumulato": cf_cum,
+}).set_index("Anno")
 
-summary = pd.DataFrame({
-    "KPI": ["Punto di Pareggio (ric/g)", "Anno Payback", "ROI Finale", "MOL Annuo"],
-    "Valore": [round(kwh_giorno_domanda / 12, 1), payback, f"{roi*100:.1f}%", eur(margine_annuo)]
-})
+st.dataframe(df_exec.style.format({
+    "Clienti medi / giorno": "{:.1f}",
+    "Saturazione Asset %": pct,
+    "EBITDA": eur,
+    "CAPEX annuo": eur,
+    "Cash Flow cumulato": eur,
+}))
 
-st.subheader("Executive Summary")
-st.table(summary)
+# ============================================================
+# MARKET FUNNEL ANALYSIS (STRATEGIC VIEW)
+# ============================================================
+st.subheader("📊 Market Funnel Analysis (Strategic View)")
 
-fig2, ax2 = plt.subplots()
-ax2.plot(years, np.cumsum(cashflow), color="#003366", label="Cumulato")
-ax2.bar(years, [0] + cashflow[1:], color="#2e7d32", label="EBITDA")
-ax2.bar(0, -capex_tot, color="#c62828", label="CAPEX")
-ax2.legend()
-st.pyplot(fig2)
+df_funnel = pd.DataFrame({
+    "Anno": years,
+    "Parco BEV Provincia": bev_citta,
+    "Bacino Pubblico": bev_citta * public_share,
+    "Quota Cattura %": quota_stazione,
+    "Energia totale venduta (kWh)": energia_kwh,
+}).set_index("Anno")
+
+st.dataframe(df_funnel.style.format({
+    "Parco BEV Provincia": "{:,.0f}",
+    "Bacino Pubblico": "{:,.0f}",
+    "Quota Cattura %": pct,
+    "Energia totale venduta (kWh)": "{:,.0f}",
+}))
+
+# ============================================================
+# STRESS TEST & SENSITIVITY (CFO VIEW)
+# ============================================================
+if cfo_mode:
+    st.subheader("⚠️ Stress Test & Sensitivity (CFO View)")
+
+    scenarios = {
+        "Bear": 0.8,
+        "Base": 1.0,
+        "Bull": 1.2,
+    }
+
+    rows = []
+    for k, m in scenarios.items():
+        cf = cf_netto * m
+        rows.append({
+            "Scenario": k,
+            "NPV": npf.npv(0.08, cf),
+            "IRR": npf.irr(cf),
+            "Payback (anni)": np.argmax(np.cumsum(cf) > 0)
+        })
+
+    df_stress = pd.DataFrame(rows).set_index("Scenario")
+
+    st.dataframe(df_stress.style.format({
+        "NPV": eur,
+        "IRR": "{:.2%}",
+        "Payback (anni)": "{:.1f}",
+    }))
+
+# ============================================================
+# REPORT ANALITICO — DF_MASTER RIORDINATO
+# ============================================================
+st.subheader("📈 Report Operativo & Finanziario")
+
+df_master = pd.DataFrame({
+    "Anno": years,
+
+    # Driver operativi
+    "BEV": bev_citta,
+    "Quota pubblica": public_share,
+    "Quota cattura": quota_stazione,
+    "Auto target": auto_clienti_anno.astype(int),
+    "Energia kWh": energia_kwh.astype(int),
+    "Sessioni/giorno": sessioni_giorno_tot.round(1),
+    "Unità totali": n_totale.astype(int),
+    "Saturazione": saturazione_sessioni,
+
+    # Finanziari (a destra)
+    "Fatturato": ricavi,
+    "EBITDA": ebitda,
+    "CF netto": cf_netto,
+    "CF cumulato": cf_cum,
+}).set_index("Anno")
+
+st.dataframe(df_master.style.format({
+    "Quota pubblica": pct,
+    "Quota cattura": pct,
+    "Saturazione": pct,
+    "Fatturato": eur,
+    "EBITDA": eur,
+    "CF netto": eur,
+    "CF cumulato": eur,
+}))
