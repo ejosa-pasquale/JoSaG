@@ -193,8 +193,8 @@ def compute_case(params):
 # ============================================================
 # Header
 # ============================================================
-st.title("🛡️ Executive Support Tool: eVFs - Dc for Oil and Gas Stations")
-st.markdown("### Ev Field Service")
+st.title("🛡️ Executive Support System: eVFs - Ricarica DC Sicilia")
+st.markdown("### *Tool decisionale chiaro per GM + modalità CFO completa.*")
 
 # ============================================================
 # Sidebar
