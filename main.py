@@ -4,7 +4,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy_financial as npf
 import io
-import requests
 
 st.set_page_config(page_title="Executive Charging Suite — Sicilia - eVFSs", layout="wide")
 
@@ -69,10 +68,10 @@ def pct(x):
         return "n/a"
     return f"{x*100:.1f}%"
 
-def forecast_bev_2030(df_hist: pd.DataFrame, province: str, method: str = "CAGR 2021–2024"):
+def forecast_bev_2030(df_hist, province, method="CAGR 2021–2024"):
     """
     Restituisce (bev_2024, bev_2030_forecast, cagr_used).
-    Metodo esplicito per trasparenza.
+    Metodo esplicito per trasparenza in riunione.
     """
     s = df_hist[df_hist["Provincia"] == province].sort_values("Anno")
     bev_2024 = int(s[s["Anno"] == 2024]["Elettrico"].iloc[0]) if (s["Anno"] == 2024).any() else int(s["Elettrico"].iloc[-1])
@@ -88,6 +87,7 @@ def forecast_bev_2030(df_hist: pd.DataFrame, province: str, method: str = "CAGR 
         years = 9
         cagr = (v1 / max(v0, 1e-9)) ** (1 / years) - 1
     else:
+        # fallback: CAGR sugli ultimi 3 punti disponibili
         tail = s.tail(3)
         v0 = float(tail["Elettrico"].iloc[0])
         v1 = float(tail["Elettrico"].iloc[-1])
@@ -101,16 +101,15 @@ def forecast_bev_2030(df_hist: pd.DataFrame, province: str, method: str = "CAGR 
 # HEADER
 # ============================================================
 st.title("🛡️ Executive Planning Tool — Fast DC - Service Stations")
-st.markdown("### eV Field Service")
+st.markdown("### eV Field Service ")
 
 # ============================================================
-# SIDEBAR — DATI TERRITORIO + FUNNEL (ORA ENERGY-DRIVEN)
+# SIDEBAR — DATI TERRITORIO + FUNNEL
 # ============================================================
 df_bev = pd.read_csv(io.StringIO(BEV_RAW), sep="\t")
 
 st.sidebar.header("🗺️ Territorio (Sicilia) — dati BEV 2015–2024")
-prov_list = sorted(df_bev["Provincia"].unique())
-province = st.sidebar.selectbox("Provincia (default Palermo)", prov_list, index=prov_list.index("PALERMO") if "PALERMO" in prov_list else 0)
+province = st.sidebar.selectbox("Provincia (default Palermo)", sorted(df_bev["Provincia"].unique()), index=sorted(df_bev["Provincia"].unique()).index("PALERMO"))
 bev_forecast_method = st.sidebar.selectbox("Metodo forecast BEV 2030 (trasparente)", ["CAGR 2021–2024", "CAGR 2015–2024"], index=0)
 
 bev_2024, bev_2030_auto, cagr_used = forecast_bev_2030(df_bev, province, bev_forecast_method)
@@ -119,9 +118,8 @@ with st.sidebar.expander("📈 Anteprima dato + forecast", expanded=False):
     st.write(f"**{province}** — BEV 2024: **{bev_2024:,}**".replace(",", "."))
     st.write(f"Forecast 2030 ({bev_forecast_method}): **{bev_2030_auto:,}** (CAGR ~ {cagr_used*100:.1f}%)".replace(",", "."))
 
-st.sidebar.header("🕹️ Domanda (Energy-led)")
-
-with st.sidebar.expander("🌍 Scenario Parco BEV", expanded=True):
+st.sidebar.header("🕹️ Market Funnel (domanda)")
+with st.sidebar.expander("🌍 Scenario Parco Auto BEV", expanded=True):
     use_auto_bev_2030 = st.checkbox("Usa forecast BEV 2030 dal dataset Sicilia", value=True)
     bev_base_2030 = st.number_input(
         f"Target BEV {province} 2030 (Scenario Base)",
@@ -130,36 +128,32 @@ with st.sidebar.expander("🌍 Scenario Parco BEV", expanded=True):
     )
     stress_bev = st.slider("Stress Test Adozione BEV (%)", 50, 150, 100) / 100
 
-with st.sidebar.expander("⚡ Energia da caricare (dal parco circolante)", expanded=True):
-    km_annui_per_bev = st.number_input("Km/anno per BEV (media)", value=12000, step=500, min_value=1000)
-    kwh_100km = st.number_input("Consumo medio (kWh/100km)", value=18.0, step=0.5, min_value=8.0)
+    st.markdown("**Intensità d'uso (per tradurre auto → energia)**")
+    km_annui_per_bev = st.number_input("Km/anno per BEV (media)", value=15000, step=500, min_value=1000)
+    kwh_100km = st.number_input("Consumo medio (kWh/100km)", value=20.0, step=0.5, min_value=8.0)
+
     public_share = st.slider(
-        "Quota energia ricaricata su pubblico (%)",
-        5, 80, 30,
-        help="Quota di energia che passa da infrastruttura pubblica (chi non ha wallbox / ricarica condominiale, ecc.)."
+        "Quota energia ricaricata su pubblico (%)", 5, 80, 30,
+        help="NON è % di auto: è la quota di ENERGIA totale (dei BEV) che passa da ricarica pubblica."
     ) / 100
 
-with st.sidebar.expander("🎯 Strategia di cattura (quota su energia pubblica)", expanded=True):
-    target_cattura_2030 = st.slider("Quota cattura target 2030 (%)", 0.5, 25.0, 5.0) / 100
-    stress_cattura = st.slider("Efficacia competitiva (%)", 50, 150, 100) / 100
+with st.sidebar.expander("🎯 Strategia di Cattura", expanded=True):
+    target_cattura_2030 = st.slider("Quota Cattura Target 2030 (%)", 0.5, 20.0, 5.0) / 100
+    stress_cattura = st.slider("Efficacia Competitiva Stazione (%)", 50, 150, 100) / 100
 
 # ============================================================
-# SIDEBAR — MODULI 30 kW + OPERATIVITÀ + FINANZA
+# SIDEBAR — TECNICA + FINANZA (con modalità CFO)
 # ============================================================
-st.sidebar.header("⚙️ Moduli 30 kW, Operatività e Finanza")
-
-with st.sidebar.expander("🔧 Moduli 30 kW (ottimizzazione saturazione)", expanded=True):
-    module_kw = 30
-    efficienza = st.slider("Efficienza complessiva (perdite, conversione) (%)", 85, 100, 95) / 100
+st.sidebar.header("⚙️ Asset, Operatività e Finanza")
+with st.sidebar.expander("🔧 Scelte Tecniche", expanded=True):
+    tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"], index=0)
+    allocazione = st.radio("Strategia Location", ["Monosito (Tutto in A)", "Multisito (Espansione in B)"], index=0)
+    ore_max_giorno = st.slider("Disponibilità Operativa (ore/giorno)", 4, 24, 10)
+    kwh_per_sessione = st.number_input("kWh medi richiesti per ricarica", value=35, min_value=5)
     uptime = st.slider("Uptime tecnico (%)", 85, 100, 97) / 100
-    target_saturazione = st.slider(
-        "Target utilizzo massimo (anti-coda) (%)",
-        30, 95, 80,
-        help="Se il carico previsto supera questo target, aggiungiamo moduli per evitare code e vendite perse."
-    ) / 100
-
-    kwh_per_sessione = st.number_input("kWh medi per sessione", value=35.0, step=1.0, min_value=5.0)
-    ore_max_giorno = st.slider("Disponibilità operativa (ore/giorno)", 4, 24, 10)
+    # Importantissimo: il PDF usa utilizzo medio annuo (30%) per dimensionare
+    utilizzo_medio_annuo = st.slider("Utilizzo medio annuo per dimensionamento (PDF) (%)", 10, 80, 30) / 100
+    saturazione_target = st.slider("Target saturazione operativa (anti-coda) (%)", 30, 95, 80) / 100
 
 with st.sidebar.expander("💰 Pricing & Costi", expanded=True):
     prezzo_kwh = st.number_input("Prezzo vendita (€/kWh)", value=0.69, step=0.01)
@@ -168,9 +162,11 @@ with st.sidebar.expander("💰 Pricing & Costi", expanded=True):
     fee_roaming = st.slider("Fee roaming/acquiring (% su ricavi ricarica) [CFO]", 0.0, 15.0, 0.0) / 100
     canone_potenza = st.number_input("Canone potenza / demand charges (€/kW-anno) [CFO]", value=0.0, step=5.0)
 
-    capex_modulo = st.number_input("CAPEX per modulo 30 kW (€)", value=25000.0, step=1000.0)
-    opex_modulo = st.number_input("OPEX per modulo/anno (€)", value=2000.0, step=100.0)
-    opex_sito_fisso = st.number_input("OPEX fisso sito/anno (€)", value=0.0, step=500.0)
+    capex_unit = 25000 if tecnologia == "DC 30 kW" else 45000
+    opex_unit = 2000 if tecnologia == "DC 30 kW" else 3500
+
+    capex_unit = st.number_input("CAPEX per unità (override) (€)", value=float(capex_unit), step=1000.0)
+    opex_unit = st.number_input("OPEX per unità/anno (override) (€)", value=float(opex_unit), step=100.0)
     ammortamento_anni = st.slider("Ammortamento gestionale (anni) (break-even)", 3, 12, 5)
 
 with st.sidebar.expander("🏦 Modalità CFO (tasse, WC, scenari, tornado)", expanded=False):
@@ -178,16 +174,522 @@ with st.sidebar.expander("🏦 Modalità CFO (tasse, WC, scenari, tornado)", exp
     wacc = st.slider("WACC (%)", 4, 12, 8) / 100
     tax_rate = st.slider("Tax rate effettivo (%)", 0, 40, 28) / 100
     wc_pct = st.slider("Working capital (% ricavi totali)", 0.0, 20.0, 2.0) / 100
+    # scenario pack
     scenario_view = st.selectbox("Scenario da visualizzare", ["Base", "Bear", "Bull"], index=0)
 
-with st.sidebar.expander("🧭 Orizzonte e allocazione moduli", expanded=False):
-    start_year = st.number_input("Anno inizio piano", value=2026, min_value=2024, max_value=2035)
-    end_year = st.number_input("Anno fine piano", value=2030, min_value=int(start_year), max_value=2040)
-    allocazione = st.radio("Strategia Location", ["Monosito (tutto in A)", "Multisito (espansione in B)"], index=0)
+# ============================================================
+# LOGICA (pdf-like + manager-friendly)
+# ============================================================
+years = np.array([2026, 2027, 2028, 2029, 2030])
+potenza_kw = 30 if tecnologia == "DC 30 kW" else 60
+
+# (A) Strength PDF: percorso annuale "a scalini" (opzionale lock)
+with st.sidebar.expander("🔒 PDF Lock (per replica 1:1 del report PDF)", expanded=False):
+    pdf_lock = st.checkbox("Allinea a ipotesi PDF (BEV e cattura a scalini + capacità PDF)", value=False)
+    st.caption("Quando ON: BEV e quota cattura usano scalini del PDF e capacità per unità usa kW×8760×uptime×utilizzo medio.")
+
+if pdf_lock:
+    # Valori presi dal PDF (DC30 Palermo) — se cambi provincia, qui rimane 'pdf reference'
+    bev_citta = np.array([2600, 3000, 3500, 4200, 5000], dtype=float) * stress_bev
+    quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05], dtype=float) * stress_cattura
+else:
+    # traiettoria trasparente e modificabile (lineare verso target)
+    bev_citta = np.linspace(bev_base_2030 * 0.5, bev_base_2030, len(years)) * stress_bev
+    quota_stazione = np.linspace(0.02, target_cattura_2030, len(years)) * stress_cattura
+
+# Funnel (energy-led)
+# kWh/BEV/anno (default coerente col PDF: 15.000 km × 20 kWh/100km = 3.000 kWh)
+kwh_annui_per_auto = (km_annui_per_bev * kwh_100km) / 100.0
+
+# Energia totale BEV e quota che passa sul pubblico (public_share = quota ENERGIA, non quota AUTO)
+energia_bev_tot_kwh = bev_citta * kwh_annui_per_auto
+energia_pubblica_kwh = energia_bev_tot_kwh * public_share
+
+# Energia catturata dalla stazione (quota_stazione applicata all'energia pubblica)
+energia_kwh = energia_pubblica_kwh * quota_stazione
+
+# Per chi ragiona "a numero auto": auto equivalenti servite (proxy)
+auto_clienti_anno = np.where(kwh_annui_per_auto > 0, energia_kwh / kwh_annui_per_auto, 0)
+
+# (B) Capacità/Dimensionamento — due metodi: PDF (kWh/anno) o Session-based (anti-coda)
+metodo_capacita = "PDF kWh/anno (kW×8760×uptime×utilizzo)" if pdf_lock else st.sidebar.selectbox(
+    "Metodo capacità (dimensionamento)",
+    ["Session-based (ore/giorno + kWh/sessione + anti-coda)", "PDF kWh/anno (kW×8760×uptime×utilizzo)"],
+    index=0
+)
+
+if metodo_capacita.startswith("PDF"):
+    # Formula PDF: kW * 8760 * uptime * utilizzo_medio_annuo
+    cap_kwh_unit_anno = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
+    n_totale = np.ceil(energia_kwh / max(cap_kwh_unit_anno, 1e-9)).astype(int)
+
+    # per reporting: sessioni stimate (solo informativo)
+    sessioni_anno = energia_kwh / max(kwh_per_sessione, 1e-9)
+    sessioni_giorno_tot = sessioni_anno / 365
+    saturazione_sessioni = np.nan * np.ones_like(energia_kwh)  # non usato in questo metodo
+else:
+    # Session-based: molto leggibile per GM (ricariche/giorno, colli di bottiglia, ecc.)
+    minuti_sessione = (kwh_per_sessione / max(potenza_kw, 1e-9)) * 60
+    sessioni_giorno_per_unita = (ore_max_giorno * 60 / max(minuti_sessione, 1e-9)) * uptime * saturazione_target
+    sessioni_anno_per_unita = sessioni_giorno_per_unita * 365
+
+    sessioni_anno = energia_kwh / max(kwh_per_sessione, 1e-9)
+    n_totale = np.ceil(sessioni_anno / max(sessioni_anno_per_unita, 1e-9)).astype(int)
+
+    sessioni_giorno_tot = sessioni_anno / 365
+    saturazione_sessioni = np.where(n_totale > 0, sessioni_anno / (n_totale * sessioni_anno_per_unita), 0)
+
+# Allocazione location
+stazione_A = np.ones(len(years))
+stazione_B = np.zeros(len(years))
+for i, n in enumerate(n_totale):
+    if allocazione == "Multisito (Espansione in B)" and n > 1:
+        stazione_B[i] = n - 1
+        stazione_A[i] = 1
+    else:
+        stazione_A[i] = n
+
+# Ricavi e margini "Base"
+ricavi = energia_kwh * prezzo_kwh
+costi_energia = energia_kwh * costo_kwh
+fee_roaming_eur = ricavi * fee_roaming
+# canone potenza: € / (kW-anno) * kW contrattuali (proxy: potenza_kw per unità)
+canone_potenza_eur = (n_totale * potenza_kw) * canone_potenza
+ebitda = (ricavi - costi_energia - fee_roaming_eur) - (n_totale * opex_unit) - canone_potenza_eur
+
+# CAPEX flow
+capex_flow = np.zeros(len(years)); prev_n = 0
+for i, n in enumerate(n_totale):
+    capex_flow[i] = max(0, n - prev_n) * capex_unit
+    prev_n = n
+
+# Cash flow manager-friendly (come PDF): CF netto = EBITDA - CAPEX
+cf_netto = ebitda - capex_flow
+cf_cum = np.cumsum(cf_netto)
+
+# ROI semplice sull'orizzonte (come PDF)
+tot_capex = capex_flow.sum()
+roi_semplice = ((cf_netto.sum()) / tot_capex) if tot_capex > 0 else np.nan
+
+# Payback
+payback = np.nan
+for i in range(len(years)):
+    if cf_cum[i] >= 0:
+        payback = years[i]
+        break
 
 # ============================================================
-# COMPETITOR 5 KM (OSM / OVERPASS - NO API KEY)
+# Modalità CFO — calcolo FCF after-tax + WC + NPV/IRR + scenari + tornado
 # ============================================================
+def compute_cfo_kpis(mult_bev=1.0, mult_capture=1.0, delta_price=0.0, delta_cost=0.0, mult_capex=1.0, mult_opex=1.0, mult_fee=1.0, mult_canone=1.0):
+    # ricostruisco serie coerente con input (non ricalcolo dimensionamento per semplicità)
+    # -> per scenari "puliti" in riunione, in alternativa si può ricalcolare anche n_totale.
+    E = energia_kwh * mult_bev * mult_capture
+    P = prezzo_kwh * (1 + delta_price)
+    C = costo_kwh * (1 + delta_cost)
+
+    rev = E * P
+    energy_cost = E * C
+    fee = rev * (fee_roaming * mult_fee)
+    canone = (n_totale * potenza_kw) * (canone_potenza * mult_canone)
+
+    ebitda_s = (rev - energy_cost - fee) - (n_totale * (opex_unit * mult_opex)) - canone
+    capex_s = capex_flow * mult_capex
+
+    # ammortamento lineare su capex (proxy)
+    dep = np.zeros_like(ebitda_s)
+    for i in range(len(dep)):
+        dep[i] = capex_s[i] / max(ammortamento_anni, 1)
+
+    ebit_s = ebitda_s - dep
+    taxes = np.maximum(0, ebit_s) * tax_rate
+    nopat = ebit_s - taxes
+    opcf = nopat + dep
+
+    wc = (rev) * wc_pct
+    delta_wc = np.diff(np.r_[0.0, wc])
+    fcf = opcf - delta_wc - capex_s
+
+    # NPV/IRR su flussi annuali (scontati da 2026)
+    npv = npf.npv(wacc, fcf)
+    irr = npf.irr(fcf) if np.any(fcf != 0) else np.nan
+
+    return {
+        "rev": rev, "ebitda": ebitda_s, "capex": capex_s, "fcf": fcf,
+        "npv": npv, "irr": irr
+    }
+
+# scenari (con logica semplice e dichiarata)
+SCENARIOS = {
+    "Base": dict(mult_bev=1.0, mult_capture=1.0, delta_price=0.0, delta_cost=0.0, mult_capex=1.0, mult_opex=1.0, mult_fee=1.0, mult_canone=1.0),
+    "Bear": dict(mult_bev=0.85, mult_capture=0.80, delta_price=-0.05, delta_cost=0.10, mult_capex=1.10, mult_opex=1.10, mult_fee=1.0, mult_canone=1.0),
+    "Bull": dict(mult_bev=1.10, mult_capture=1.15, delta_price=0.05, delta_cost=-0.05, mult_capex=0.95, mult_opex=0.95, mult_fee=1.0, mult_canone=1.0),
+}
+
+# ============================================================
+# SEZIONE DATI SICILIA (chiara, per contestualizzare Palermo)
+# ============================================================
+st.subheader("🗺️ Dati BEV Sicilia (2015–2024) — trasparenza territorio")
+st.caption("Questi dati sono il fondamento territoriale del tool: puoi selezionare una provincia e vedere la crescita storica.")
+
+col_d1, col_d2 = st.columns([1, 1])
+with col_d1:
+    sub = df_bev[df_bev["Provincia"] == province].sort_values("Anno")
+    st.write(f"**Provincia selezionata:** {province}")
+    st.dataframe(sub.set_index("Anno"))
+
+with col_d2:
+    fig, ax = plt.subplots()
+    ax.plot(sub["Anno"], sub["Elettrico"], marker="o", linewidth=3)
+    ax.set_xlabel("Anno")
+    ax.set_ylabel("BEV (stock)")
+    st.pyplot(fig)
+    st.markdown(
+        f"""
+**Lettura rapida**
+- BEV 2024: **{bev_2024:,}**  
+- Forecast 2030 ({bev_forecast_method}): **{bev_2030_auto:,}** (CAGR ~ {cagr_used*100:.1f}%)
+        """.replace(",", ".")
+    )
+
+# ============================================================
+# DASHBOARD KPI (Manager + CFO)
+# ============================================================
+st.subheader(f"📌 Executive Summary — {province} | {tecnologia}")
+
+# --- CAPEX anno per anno (stile budgeting) ---
+capex_years = years[:3] if len(years) >= 3 else years
+capex_vals = capex_flow[:len(capex_years)]
+cA, cB, cC, cD = st.columns(4)
+for i, (yy, vv) in enumerate(zip(capex_years, capex_vals)):
+    [cA, cB, cC][i].metric(f"CAPEX {int(yy)}", eur(float(vv)))
+cD.metric("CAPEX Tot (orizzonte)", eur(float(tot_capex)))
+
+st.caption(
+    "Il CAPEX è mostrato **anno per anno**: indica quanto investi in ciascun anno (nuove unità + eventuali upgrade). "
+    "Se vedi un valore alto nel 2026, significa che il dimensionamento sta installando più unità già dal primo anno."
+)
+
+# --- KPI principali (GM + CFO) ---
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Fatturato 2030", eur(float(ricavi[-1])))
+k2.metric("EBITDA 2030", eur(float(ebitda[-1])))
+k3.metric("ROI semplice (periodo)", f"{roi_semplice*100:.0f}%" if np.isfinite(roi_semplice) else "n/a")
+k4.metric("Payback (anno)", f"{payback}" if np.isfinite(payback) else "n/a")
+k5.metric("CF cumulato 2030", eur(float(cf_cum[-1])))
+
+if cfo_mode:
+    cfo = compute_cfo_kpis(**SCENARIOS[scenario_view])
+    k6, k7 = st.columns(2)
+    k6.metric(f"NPV (CFO) — {scenario_view}", eur(float(cfo["npv"])))
+    k7.metric(f"IRR (CFO) — {scenario_view}", f"{float(cfo['irr'])*100:.1f}%" if np.isfinite(cfo["irr"]) else "n/a")
+
+# ============================================================
+# GRAFICI “stile PDF” con spiegazioni ricche
+# ============================================================
+st.divider()
+c1, c2 = st.columns(2)
+
+with c1:
+    st.write("**1) Break-even: soglia di ricariche/giorno per unità**")
+    auto_range = np.linspace(1, 40, 40)
+
+    margine_sessione = kwh_per_sessione * (prezzo_kwh - costo_kwh)  # versione base, leggibile
+    costo_fisso_day = (opex_unit + (capex_unit / ammortamento_anni)) / 365
+
+    fig1, ax1 = plt.subplots()
+    ax1.plot(auto_range, (auto_range * margine_sessione) - costo_fisso_day, linewidth=3)
+    ax1.axhline(0, linestyle='--')
+    ax1.set_xlabel("Ricariche giornaliere per unità")
+    ax1.set_ylabel("Margine giornaliero per unità (€)")
+    st.pyplot(fig1)
+
+    st.markdown(r"""
+**Formula (operativa)**
+- $N_{BE} = \frac{OPEX_{day} + Amm_{day}}{kWh_{sess}\cdot(P_{vend} - C_{energia})}$
+""")
+
+st.markdown(
+    f"""
+**Con gli input attuali**
+- Margine/sessione (solo energia): **{margine_sessione:.2f} €**
+- OPEX + ammortamento (per unità/giorno): **{costo_fisso_day:.2f} € / giorno**
+- Quindi la soglia è dell’ordine di poche ricariche/giorno (dipende da prezzo/costo e OPEX).
+
+**Come leggerlo**
+- Sopra la linea 0 → la singola colonnina “sta in piedi” (in senso operativo).
+- Sotto 0 → anche se installi, senza traffico non rientri.
+
+**Azioni tipiche**
+- Aumentare margine (prezzo, costo energia, ancillary), ridurre OPEX o migliorare cattura.
+    """.replace(",", ".")
+)
+
+
+with c2:
+    st.write("**2) Cash Flow cumulato: quando recuperi l’investimento**")
+    fig2, ax2 = plt.subplots()
+    ax2.plot(years, cf_cum, marker='o', linewidth=3)
+    ax2.fill_between(years, cf_cum, 0, where=(cf_cum >= 0), alpha=0.15)
+    ax2.axhline(0, linewidth=1)
+    ax2.set_xlabel("Anno")
+    ax2.set_ylabel("€ cumulati")
+    st.pyplot(fig2)
+
+    st.markdown(rf"""
+**Formula (come PDF)**
+- $CF_{{netto,t}} = EBITDA_t - CAPEX_t$
+- $CF_{{cum,t}} = \sum CF_{{netto}}$
+
+**Interpretazione**
+- Il punto in cui la curva supera 0 è il **Payback**.
+
+**Perché può cambiare**
+- Se cambia il numero di unità (dimensionamento), cambia il CAPEX e quindi il payback.
+- Se attivi fee roaming o canoni potenza (CFO), il payback può peggiorare.
+    """)
+
+c3, c4 = st.columns(2)
+
+with c3:
+    st.write("**3) Colli di bottiglia: domanda vs capacità (unità richieste)**")
+    fig3, ax3 = plt.subplots()
+    ax3.bar(years, n_totale, linewidth=0)
+    ax3.set_xlabel("Anno")
+    ax3.set_ylabel("Unità richieste")
+    st.pyplot(fig3)
+
+    if metodo_capacita.startswith("PDF"):
+        cap_kwh_unit_anno = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
+        st.markdown(rf"""
+**Formula capacità (PDF)**
+- $kWh_{{unit,anno}} = kW \cdot 8760 \cdot Uptime \cdot Utilizzo$
+
+**Con input attuali**
+- Capacità 1 unità: **{cap_kwh_unit_anno:,.0f} kWh/anno**  
+- Se la domanda (kWh) cresce, le unità richieste aumentano “a scalini”.
+        """.replace(",", "."))
+    else:
+        st.markdown(rf"""
+**Capacità session-based (più leggibile per GM)**
+- Sessioni/giorno per unità dipendono da ore/giorno, kWh/sessione, uptime e target anti-coda.
+- Se la saturazione stimata si avvicina a 100%, iniziano code e vendite perse.
+        """)
+
+with c4:
+    st.write("**4) Struttura margini (totale periodo)**")
+    labels = ['Ricavi', 'Costi Energia', 'Fee Roaming', 'Canone Potenza', 'OPEX', 'EBITDA']
+    vals = [
+        ricavi.sum(),
+        costi_energia.sum(),
+        fee_roaming_eur.sum(),
+        canone_potenza_eur.sum(),
+        (n_totale * opex_unit).sum(),
+        ebitda.sum()
+    ]
+    fig4, ax4 = plt.subplots()
+    ax4.bar(labels, vals)
+    ax4.tick_params(axis='x', rotation=20)
+    ax4.set_ylabel("€ (somma periodo)")
+    st.pyplot(fig4)
+
+    st.markdown(r"""
+**Cosa mostra**
+- Quanto “mangiano” energia, OPEX e (in modalità CFO) fee e canoni.
+- Se l’EBITDA è piccolo rispetto ai costi, serve lavorare su margine o cattura.
+    """)
+
+# ============================================================
+# 5) Capacità 1 unità vs domanda città + target cattura (e indicatore "quando non basta")
+# ============================================================
+st.divider()
+st.subheader("5) Domanda in crescita e target cattura: **1 unità basta?**")
+
+st.caption(
+    f"Questa sezione confronta: **bacino pubblico** (BEV×quota pubblica), **target cattura** e la **capacità di 1 unità {tecnologia}**."
+)
+
+# capacità 1 unità in auto equivalenti (stile PDF: kWh/anno -> auto/anno)
+cap_unit_kwh = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
+# Unità necessarie per servire l'energia target (dimensionamento su energia)
+units_needed_for_target = np.where(cap_unit_kwh > 0, energia_kwh / cap_unit_kwh, np.nan)
+
+# Per confronto "bacino pubblico": energia pubblica ed equivalente auto (proxy)
+bev_pubbliche = np.where(kwh_annui_per_auto > 0, energia_pubblica_kwh / kwh_annui_per_auto, 0)
+
+col5a, col5b = st.columns(2)
+with col5a:
+    st.write("**5A) Bacino pubblico vs target**")
+    fig, ax = plt.subplots()
+    ax.plot(years, energia_pubblica_kwh/1000, marker="o", linewidth=3, label="Energia pubblica (MWh/anno)")
+    ax.plot(years, energia_kwh/1000, marker="o", linewidth=3, label="Energia target cattura (MWh/anno)")
+    ax.set_xlabel("Anno")
+    ax.set_ylabel("MWh/anno")
+    ax.legend()
+    st.pyplot(fig)
+
+    st.markdown(rf"""
+**Interpretazione**
+- Se il bacino pubblico cresce ma il target resta basso, non è un limite di mercato ma di strategia (cattura).
+- Il target dipende da location, competizione, servizi, prezzo percepito.
+
+**Con input attuali**
+- Energia pubblica 2030 ≈ **{energia_pubblica_kwh[-1]/1000:,.1f} MWh**
+- Energia target (cattura) 2030 ≈ **{energia_kwh[-1]/1000:,.1f} MWh** (≈ **{(energia_kwh[-1]/max(energia_pubblica_kwh[-1],1e-9))*100:.1f}%** dell'energia pubblica)
+
+> Proxy utile per chi ragiona in auto:  
+> - Bacino pubblico 2030 ≈ **{bev_pubbliche[-1]:,.0f} auto equivalenti**  
+> - Target 2030 ≈ **{auto_clienti_anno[-1]:,.0f} auto equivalenti**
+    """.replace(",", "."))
+
+with col5b:
+    st.write("**5B) Quante unità servono per servire il target? (soglia=1)**")
+    fig, ax = plt.subplots()
+    ax.plot(years, units_needed_for_target, marker="o", linewidth=3, label="Unità necessarie (equivalenti)")
+    ax.axhline(1, linestyle="--", linewidth=1)
+    ax.set_xlabel("Anno")
+    ax.set_ylabel("Unità richieste")
+    ax.legend()
+    st.pyplot(fig)
+
+    st.markdown(rf"""
+**Capacità 1 unità (stile PDF)**
+- $kWh_{{unit,anno}} = {potenza_kw}\cdot 8760 \cdot {uptime:.2f} \cdot {utilizzo_medio_annuo:.2f} \approx {cap_unit_kwh:,.0f}$
+- Auto equivalenti/anno: **{cap_unit_auto_eq:,.0f} auto**
+
+**Come leggere**
+- Se la linea supera 1 → **1 unità non basta** per il target.
+- L’anno in cui supera 1 è un ottimo **indicatore decisionale** (quando servono 2 unità).
+    """.replace(",", "."))
+
+# Indicatore: primo anno in cui 1 unità non basta
+anno_non_basta = None
+for i, y in enumerate(years):
+    if units_needed_for_target[i] > 1:
+        anno_non_basta = int(y)
+        break
+
+if anno_non_basta:
+    st.warning(f"📌 Indicatore: con gli input attuali, **1 unità non basta a partire dal {anno_non_basta}** (servono ≥ 2 unità).")
+else:
+    st.success("📌 Indicatore: con gli input attuali, **1 unità basta** per tutto l’orizzonte 2026–2030.")
+
+# ============================================================
+# 6) Modalità CFO: scenari Base/Bear/Bull + Tornado
+# ============================================================
+if cfo_mode:
+    st.divider()
+    st.subheader("🏦 Modalità CFO — scenari e sensitività")
+
+    # Tabella scenari
+    rows = []
+    for name, params in SCENARIOS.items():
+        res = compute_cfo_kpis(**params)
+        rows.append({
+            "Scenario": name,
+            "NPV": res["npv"],
+            "IRR": res["irr"],
+            "Fatturato 2030": float(res["rev"][-1]),
+            "EBITDA 2030": float(res["ebitda"][-1]),
+        })
+    df_scen = pd.DataFrame(rows).set_index("Scenario")
+    st.write("### Scenari (Base / Bear / Bull)")
+    st.dataframe(df_scen.style.format({
+        "NPV": "{:,.0f}",
+        "IRR": "{:.2%}",
+        "Fatturato 2030": "{:,.0f}",
+        "EBITDA 2030": "{:,.0f}",
+    }))
+
+    # Tornado (NPV)
+    st.write("### Tornado Sensitivity (NPV)")
+    base_npv = compute_cfo_kpis(**SCENARIOS["Base"])["npv"]
+    drivers = [
+        ("Prezzo €/kWh", {"delta_price": -0.10}, {"delta_price": 0.10}),
+        ("Costo energia €/kWh", {"delta_cost": -0.10}, {"delta_cost": 0.10}),
+        ("BEV (domanda città)", {"mult_bev": 0.90}, {"mult_bev": 1.10}),
+        ("Quota cattura", {"mult_capture": 0.85}, {"mult_capture": 1.15}),
+        ("CAPEX", {"mult_capex": 0.90}, {"mult_capex": 1.10}),
+        ("OPEX", {"mult_opex": 0.90}, {"mult_opex": 1.10}),
+        ("Fee roaming", {"mult_fee": 0.50}, {"mult_fee": 1.50}),
+        ("Canone potenza", {"mult_canone": 0.50}, {"mult_canone": 1.50}),
+    ]
+
+    tor_rows = []
+    for dname, low, high in drivers:
+        low_params = dict(SCENARIOS["Base"]); low_params.update(low)
+        high_params = dict(SCENARIOS["Base"]); high_params.update(high)
+        npv_low = compute_cfo_kpis(**low_params)["npv"]
+        npv_high = compute_cfo_kpis(**high_params)["npv"]
+        tor_rows.append({"Driver": dname, "NPV Low": npv_low, "NPV Base": base_npv, "NPV High": npv_high, "Delta": npv_high - npv_low})
+
+    tdf = pd.DataFrame(tor_rows).sort_values("Delta", ascending=True)
+
+    fig, ax = plt.subplots()
+    y = np.arange(len(tdf))
+    ax.hlines(y, tdf["NPV Low"].values, tdf["NPV High"].values, linewidth=6)
+    ax.plot(tdf["NPV Base"].values, y, "o")
+    ax.set_yticks(y)
+    ax.set_yticklabels(tdf["Driver"].values)
+    ax.set_xlabel("NPV (VAN) €")
+    ax.axvline(base_npv, linewidth=1)
+    st.pyplot(fig)
+
+    st.caption("Il Tornado mostra quali variabili muovono di più il VAN: ottimo per decidere su cosa fare due diligence.")
+
+# ============================================================
+# REPORT TABELLARE
+# ============================================================
+st.divider()
+st.subheader("📊 Report Analitico: funnel, saturazione, ricavi e ritorno")
+
+df_master = pd.DataFrame({
+    "Anno": years,
+    "BEV (scenario)": bev_citta.astype(int),
+    "kWh/BEV/anno (proxy)": np.round(kwh_annui_per_auto, 0).astype(int),
+    "Energia BEV totale (kWh)": energia_bev_tot_kwh.astype(int),
+    "Quota energia su pubblico (%)": (public_share * 100),
+    "Energia pubblica (kWh)": energia_pubblica_kwh.astype(int),
+    "Quota cattura (%)": (quota_stazione * 100),
+    "Energia target cattura (kWh)": energia_kwh.astype(int),
+    "Auto equivalenti target (anno)": auto_clienti_anno.astype(int),
+    "Sessioni (anno)": sessioni_anno.astype(int),
+    "Sessioni/giorno tot": sessioni_giorno_tot.round(1),
+    "Unità tot": n_totale.astype(int),
+    "Unità A": stazione_A.astype(int),
+    "Unità B": stazione_B.astype(int),
+    "Saturazione stimata (%)": np.where(np.isfinite(saturazione_sessioni), (saturazione_sessioni * 100).round(1), np.nan),
+    "Fatturato (€)": ricavi.astype(int),
+    "EBITDA (€)": ebitda.astype(int),
+    "CAPEX (€)": capex_flow.astype(int),
+    "CF netto (€)": cf_netto.astype(int),
+    "CF cumulato (€)": cf_cum.astype(int),
+}).set_index("Anno")
+
+st.dataframe(df_master)
+
+with st.expander("📚 Intelligence Report (spiegazioni + limiti + allineamento PDF)", expanded=False):
+    st.markdown(
+        f"""
+### Punti di forza “stile PDF” che questo tool include
+- Ipotesi **esplicite** (BEV, quota pubblica, quota cattura, prezzo/costo, uptime, utilizzo medio annuo).
+- Dimensionamento “**a scalini**” e spiegabile.
+- Opzione **PDF lock** per replicare BEV e quota cattura a scalini e la capacità per unità (kW×8760×uptime×utilizzo).
+
+### Limiti e trasparenza
+- La conversione Auto → kWh usa **{kwh_annui_per_auto} kWh/auto/anno** (proxy): se hai dato locale, sostituiscilo.
+- In modalità **Base** il cash flow è **EBITDA − CAPEX** (come nel PDF).
+- In modalità **CFO** aggiungiamo: tasse, WC, fee roaming, canoni potenza, scenari e tornado (investment-grade).
+        """
+    )
+# =============================
+# SEZIONE 6 — COMPETITOR 5 KM (OSM / OVERPASS - NO API KEY)
+# =============================
+import requests
+import pandas as pd
+import numpy as np
+import streamlit as st
+
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     phi1, phi2 = np.radians(lat1), np.radians(lat2)
@@ -198,7 +700,14 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 @st.cache_data(ttl=60*60)
 def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
+    """
+    Cerca stazioni di ricarica (amenity=charging_station) entro radius_km.
+    Ritorna (ok: bool, df: DataFrame, err: str|None)
+    """
     radius_m = int(radius_km * 1000)
+
+    # Query Overpass: nodi + ways + relations
+    # NOTA: out center serve per ways/relations
     query = f"""
     [out:json][timeout:25];
     (
@@ -208,8 +717,12 @@ def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
     );
     out center tags;
     """
+
     url = "https://overpass-api.de/api/interpreter"
-    headers = {"User-Agent": "evfs-executive-suite/1.0 (contact: you@example.com)"}
+    headers = {
+        # User-Agent "gentile" (riduce chance di blocco)
+        "User-Agent": "palermo-charging-suite/1.0 (contact: you@example.com)"
+    }
 
     try:
         r = requests.post(url, data=query.encode("utf-8"), headers=headers, timeout=35)
@@ -227,10 +740,12 @@ def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
     except ValueError:
         return False, pd.DataFrame(), "Risposta Overpass non-JSON (endpoint instabile)."
 
+    elements = data.get("elements", [])
     rows = []
-    for el in data.get("elements", []):
+    for el in elements:
         tags = el.get("tags", {}) or {}
 
+        # coordinate: node => lat/lon; ways/relations => center
         if el.get("type") == "node":
             lat2 = el.get("lat")
             lon2 = el.get("lon")
@@ -242,11 +757,14 @@ def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
         if lat2 is None or lon2 is None:
             continue
 
-        dist = float(haversine_km(lat, lon, float(lat2), float(lon2)))
+        dist = float(haversine_km(lat, lon, lat2, lon2))
+
+        # Metadati utili quando disponibili
         name = tags.get("name", "charging_station")
         operator = tags.get("operator", "")
         capacity = tags.get("capacity", "")
         access = tags.get("access", "")
+        # a volte compaiono socket tags: socket:type2, socket:chademo, socket:ccs...
         sockets = [k for k in tags.keys() if k.startswith("socket:")]
 
         rows.append({
@@ -272,6 +790,7 @@ def competition_factor_osm(df_poi):
     Moltiplicatore 'soft' (0.60–1.00) basato su:
     - n. stazioni nel raggio
     - distanza del competitor più vicino
+    (OSM spesso non ha potenza: qui non usiamo kW)
     """
     if df_poi is None or df_poi.empty:
         return 1.00, {"n_sites": 0, "nearest_km": None}
@@ -279,366 +798,25 @@ def competition_factor_osm(df_poi):
     n_sites = int(len(df_poi))
     nearest_km = float(df_poi["Distanza_km"].min())
 
+    # penalità “morbida” (tarabile)
     pen = 0.00
-    pen += min(0.30, 0.02 * n_sites)                      # fino a -30% per densità
-    pen += min(0.15, 0.10 * max(0, (2.0 - nearest_km)))    # vicino <2 km fino a -15%
+    pen += min(0.30, 0.02 * n_sites)                 # fino a -30% per densità
+    pen += min(0.15, 0.10 * max(0, (2.0 - nearest_km)))  # vicino <2 km fino a -15%
 
     factor = max(0.60, 1.00 - pen)
     meta = {"n_sites": n_sites, "nearest_km": nearest_km}
     return factor, meta
 
-# ============================================================
-# MODEL CORE — ENERGY -> MODULI -> ECONOMICS
-# ============================================================
-def build_bev_trajectory(bev_2030: float, years_arr: np.ndarray):
-    """Traiettoria lineare (50% -> 100% al 2030/ultimo anno) per trasparenza."""
-    return np.linspace(bev_2030 * 0.5, bev_2030, len(years_arr))
-
-def compute_plan(bev_series, capture_series, competition_factor=1.0):
-    """
-    Calcola energia pubblica, energia catturata, moduli necessari (30kW),
-    e flussi economici.
-    """
-    # Energia annua per BEV
-    kwh_per_km = (kwh_100km / 100.0)
-    kwh_per_bev_year = km_annui_per_bev * kwh_per_km
-
-    # Domanda energia pubblica (totale territorio)
-    energy_public_kwh = bev_series * kwh_per_bev_year * public_share
-
-    # Quota cattura effettiva (su energia pubblica) con fattore competizione
-    capture_eff = np.clip(capture_series * competition_factor, 0.0, 1.0)
-    energy_station_kwh = energy_public_kwh * capture_eff
-
-    # Sessioni annue stimate
-    sessions_year = energy_station_kwh / max(kwh_per_sessione, 1e-9)
-    sessions_day = sessions_year / 365.0
-
-    # Capacità modulo: energia annua a 100% (poi dimensioniamo per stare sotto target_saturazione)
-    hours_year = 8760.0
-    cap_module_kwh_year_100 = module_kw * hours_year * uptime * efficienza
-    modules_needed = np.ceil(energy_station_kwh / max(cap_module_kwh_year_100 * target_saturazione, 1e-9)).astype(int)
-    modules_needed = np.maximum(modules_needed, 1)
-
-    # Saturazione attesa (utilizzo reale vs max teorico)
-    saturation = np.where(modules_needed > 0, energy_station_kwh / (modules_needed * cap_module_kwh_year_100), 0.0)
-
-    # CAPEX “a scalini”
-    capex_flow = np.zeros_like(bev_series, dtype=float)
-    prev = 0
-    for i, n in enumerate(modules_needed):
-        add = max(0, int(n) - int(prev))
-        capex_flow[i] = add * capex_modulo
-        prev = int(n)
-
-    # OPEX: per modulo + fisso sito
-    opex = modules_needed * opex_modulo + opex_sito_fisso
-
-    # Ricavi e costi
-    ricavi = energy_station_kwh * prezzo_kwh
-    costi_energia = energy_station_kwh * costo_kwh
-    fee_roaming_eur = ricavi * fee_roaming
-    canone_potenza_eur = (modules_needed * module_kw) * canone_potenza
-
-    ebitda = (ricavi - costi_energia - fee_roaming_eur) - opex - canone_potenza_eur
-    cf_netto = ebitda - capex_flow
-    cf_cum = np.cumsum(cf_netto)
-
-    return {
-        "energy_public_kwh": energy_public_kwh,
-        "energy_station_kwh": energy_station_kwh,
-        "capture_eff": capture_eff,
-        "sessions_year": sessions_year,
-        "sessions_day": sessions_day,
-        "modules": modules_needed,
-        "saturation": saturation,
-        "capex_flow": capex_flow,
-        "opex": opex,
-        "ricavi": ricavi,
-        "costi_energia": costi_energia,
-        "fee_roaming": fee_roaming_eur,
-        "canone_potenza": canone_potenza_eur,
-        "ebitda": ebitda,
-        "cf_netto": cf_netto,
-        "cf_cum": cf_cum,
-        "cap_module_kwh_year_100": cap_module_kwh_year_100,
-        "kwh_per_bev_year": kwh_per_bev_year,
-    }
-
-def compute_cfo_kpis(years_arr, plan):
-    """
-    FCF investment-grade: NOPAT + Dep - dWC - CAPEX.
-    """
-    rev = plan["ricavi"].astype(float)
-    ebitda_s = plan["ebitda"].astype(float)
-    capex_s = plan["capex_flow"].astype(float)
-
-    # Depreciation proxy: lineare sul CAPEX dell'anno (semplificazione manageriale)
-    dep = capex_s / max(ammortamento_anni, 1)
-    ebit = ebitda_s - dep
-
-    taxes = np.maximum(0, ebit) * tax_rate
-    nopat = ebit - taxes
-    opcf = nopat + dep
-
-    wc = rev * wc_pct
-    delta_wc = np.diff(np.r_[0.0, wc])
-    fcf = opcf - delta_wc - capex_s
-
-    npv = npf.npv(wacc, fcf)
-    irr = npf.irr(fcf) if np.any(fcf != 0) else np.nan
-
-    return {"rev": rev, "ebitda": ebitda_s, "capex": capex_s, "fcf": fcf, "npv": npv, "irr": irr}
-
-# ============================================================
-# COSTRUZIONE SERIE (ORIZZONTE)
-# ============================================================
-years = np.arange(int(start_year), int(end_year) + 1)
-bev_series = build_bev_trajectory(bev_base_2030, years) * stress_bev
-capture_series = np.linspace(0.02, target_cattura_2030, len(years)) * stress_cattura
-
-competition_factor = float(st.session_state.get("competition_factor", 1.0))
-apply_competition = st.sidebar.checkbox("Applica fattore competizione OSM alla quota cattura (se disponibile)", value=True)
-competition_applied = competition_factor if apply_competition else 1.0
-
-plan = compute_plan(bev_series, capture_series, competition_factor=competition_applied)
-
-# Allocazione moduli A/B (solo per comunicazione di rollout)
-mods_A = np.ones(len(years), dtype=int)
-mods_B = np.zeros(len(years), dtype=int)
-for i, n in enumerate(plan["modules"]):
-    if allocazione.startswith("Multisito") and n > 1:
-        mods_A[i] = 1
-        mods_B[i] = int(n - 1)
-    else:
-        mods_A[i] = int(n)
-        mods_B[i] = 0
-
-# KPI sintetici
-tot_capex = float(plan["capex_flow"].sum())
-roi_semplice = float(plan["cf_netto"].sum() / tot_capex) if tot_capex > 0 else np.nan
-
-payback = np.nan
-for i in range(len(years)):
-    if plan["cf_cum"][i] >= 0:
-        payback = years[i]
-        break
-
-# ============================================================
-# SEZIONE DATI SICILIA (contestualizzazione)
-# ============================================================
-st.subheader("🗺️ Dati BEV Sicilia (2015–2024) — trasparenza territorio")
-st.caption("Questi dati sono il fondamento territoriale del tool: seleziona una provincia e vedi crescita storica + forecast.")
-
-col_d1, col_d2 = st.columns([1, 1])
-with col_d1:
-    sub = df_bev[df_bev["Provincia"] == province].sort_values("Anno")
-    st.write(f"**Provincia selezionata:** {province}")
-    st.dataframe(sub.set_index("Anno"))
-
-with col_d2:
-    fig, ax = plt.subplots()
-    ax.plot(sub["Anno"], sub["Elettrico"], marker="o", linewidth=3)
-    ax.set_xlabel("Anno")
-    ax.set_ylabel("BEV (stock)")
-    st.pyplot(fig)
-    st.markdown(
-        f"""
-**Lettura rapida**
-- BEV 2024: **{bev_2024:,}**
-- Forecast 2030 ({bev_forecast_method}): **{bev_2030_auto:,}** (CAGR ~ {cagr_used*100:.1f}%)
-
-**Nuova logica (energy-led)**
-- kWh/BEV/anno: **{plan['kwh_per_bev_year']:,.0f}**
-- Energia pubblica = BEV × kWh/BEV × quota pubblico
-- Energia catturata = energia pubblica × quota cattura (corretta per competizione se attivo)
-        """.replace(",", ".")
-    )
-
-# ============================================================
-# EXECUTIVE SUMMARY
-# ============================================================
-st.subheader(f"📌 Executive Summary — {province} | Moduli {int(module_kw)} kW")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric(f"Energia pubblica {int(years[-1])}", f"{plan['energy_public_kwh'][-1]/1e6:.2f} GWh")
-c2.metric(f"Energia catturata {int(years[-1])}", f"{plan['energy_station_kwh'][-1]/1e6:.2f} GWh")
-c3.metric(f"Moduli richiesti {int(years[-1])}", int(plan["modules"][-1]))
-c4.metric("CAPEX Tot (orizzonte)", eur(tot_capex))
-c5.metric("Payback (anno)", f"{int(payback)}" if np.isfinite(payback) else "n/a")
-
-k1, k2, k3, k4 = st.columns(4)
-k1.metric(f"Fatturato {int(years[-1])}", eur(float(plan["ricavi"][-1])))
-k2.metric(f"EBITDA {int(years[-1])}", eur(float(plan["ebitda"][-1])))
-k3.metric("ROI semplice (periodo)", f"{roi_semplice*100:.0f}%" if np.isfinite(roi_semplice) else "n/a")
-k4.metric(f"CF cumulato {int(years[-1])}", eur(float(plan["cf_cum"][-1])))
-
-if cfo_mode:
-    # Scenari: agiscono su domanda (BEV) e cattura, prezzi/costi/capex/opex
-    SCENARIOS = {
-        "Base": dict(mult_bev=1.0, mult_capture=1.0, delta_price=0.0, delta_cost=0.0, mult_capex=1.0, mult_opex=1.0, mult_fee=1.0, mult_canone=1.0),
-        "Bear": dict(mult_bev=0.85, mult_capture=0.80, delta_price=-0.05, delta_cost=0.10, mult_capex=1.10, mult_opex=1.10, mult_fee=1.0, mult_canone=1.0),
-        "Bull": dict(mult_bev=1.10, mult_capture=1.15, delta_price=0.05, delta_cost=-0.05, mult_capex=0.95, mult_opex=0.95, mult_fee=1.0, mult_canone=1.0),
-    }
-
-    def compute_scenario(name):
-        p = SCENARIOS[name]
-        # applico variazioni ai driver
-        bev_s = bev_series * p["mult_bev"]
-        cap_s = capture_series * p["mult_capture"]
-        # temporaneamente override global inputs (pulito e trasparente)
-        global prezzo_kwh, costo_kwh, capex_modulo, opex_modulo, fee_roaming, canone_potenza
-        P0, C0 = prezzo_kwh, costo_kwh
-        CAP0, OPEX0 = capex_modulo, opex_modulo
-        F0, D0 = fee_roaming, canone_potenza
-
-        prezzo_kwh = P0 * (1 + p["delta_price"])
-        costo_kwh = C0 * (1 + p["delta_cost"])
-        capex_modulo = CAP0 * p["mult_capex"]
-        opex_modulo = OPEX0 * p["mult_opex"]
-        fee_roaming = F0 * p["mult_fee"]
-        canone_potenza = D0 * p["mult_canone"]
-
-        pl = compute_plan(bev_s, cap_s, competition_factor=competition_applied)
-        kpis = compute_cfo_kpis(years, pl)
-
-        # restore
-        prezzo_kwh, costo_kwh = P0, C0
-        capex_modulo, opex_modulo = CAP0, OPEX0
-        fee_roaming, canone_potenza = F0, D0
-        return pl, kpis
-
-    _, kpis_view = compute_scenario(scenario_view)
-    k6, k7 = st.columns(2)
-    k6.metric(f"NPV (CFO) — {scenario_view}", eur(float(kpis_view["npv"])))
-    k7.metric(f"IRR (CFO) — {scenario_view}", f"{float(kpis_view['irr'])*100:.1f}%" if np.isfinite(kpis_view["irr"]) else "n/a")
-
-# ============================================================
-# GRAFICI
-# ============================================================
+# -----------------------------
+# UI
+# -----------------------------
 st.divider()
-g1, g2 = st.columns(2)
-
-with g1:
-    st.write("**1) Domanda energia: pubblico vs catturata**")
-    fig, ax = plt.subplots()
-    ax.plot(years, plan["energy_public_kwh"] / 1e6, marker="o", linewidth=3, label="Energia pubblica (GWh)")
-    ax.plot(years, plan["energy_station_kwh"] / 1e6, marker="o", linewidth=3, label="Energia catturata (GWh)")
-    ax.set_xlabel("Anno")
-    ax.set_ylabel("GWh/anno")
-    ax.legend()
-    st.pyplot(fig)
-
-    st.caption("La domanda nasce dal parco BEV e dai km/anno: questo rende la logica solida e scalabile tra province.")
-
-with g2:
-    st.write("**2) Moduli 30 kW richiesti e saturazione attesa**")
-    fig, ax = plt.subplots()
-    ax.bar(years, plan["modules"], linewidth=0)
-    ax.set_xlabel("Anno")
-    ax.set_ylabel("Moduli installati (tot)")
-    st.pyplot(fig)
-
-    st.markdown(
-        f"""
-**Capacità modulo (100%)**
-- kWh/modulo/anno = {int(module_kw)} × 8760 × uptime × efficienza
-- = **{plan['cap_module_kwh_year_100']:,.0f} kWh/anno** per modulo
-
-**Regola di ottimizzazione**
-- moduli = ceil( energia_catturata / (capacità×target_saturazione) )
-- target_saturazione attuale: **{target_saturazione:.0%}**
-        """.replace(",", ".")
-    )
-
-g3, g4 = st.columns(2)
-with g3:
-    st.write("**3) Cash Flow cumulato**")
-    fig, ax = plt.subplots()
-    ax.plot(years, plan["cf_cum"], marker='o', linewidth=3)
-    ax.fill_between(years, plan["cf_cum"], 0, where=(plan["cf_cum"] >= 0), alpha=0.15)
-    ax.axhline(0, linewidth=1)
-    ax.set_xlabel("Anno")
-    ax.set_ylabel("€ cumulati")
-    st.pyplot(fig)
-
-with g4:
-    st.write("**4) Struttura margini (somma periodo)**")
-    labels = ['Ricavi', 'Costi Energia', 'Fee Roaming', 'Canone Potenza', 'OPEX', 'EBITDA']
-    vals = [
-        plan["ricavi"].sum(),
-        plan["costi_energia"].sum(),
-        plan["fee_roaming"].sum(),
-        plan["canone_potenza"].sum(),
-        plan["opex"].sum(),
-        plan["ebitda"].sum()
-    ]
-    fig, ax = plt.subplots()
-    ax.bar(labels, vals)
-    ax.tick_params(axis='x', rotation=20)
-    ax.set_ylabel("€ (somma periodo)")
-    st.pyplot(fig)
-
-# ============================================================
-# REPORT TABELLARE + EXPORT
-# ============================================================
-st.divider()
-st.subheader("📊 Report Analitico: energia, moduli, saturazione, ricavi e ritorno")
-
-df_master = pd.DataFrame({
-    "Anno": years,
-    "BEV (scenario)": bev_series.round(0).astype(int),
-    "kWh/BEV/anno": int(round(plan["kwh_per_bev_year"])),
-    "Quota energia pubblico (%)": (public_share * 100),
-    "Quota cattura effettiva (%)": (plan["capture_eff"] * 100).round(2),
-    "Energia pubblica (kWh)": plan["energy_public_kwh"].round(0).astype(int),
-    "Energia catturata (kWh)": plan["energy_station_kwh"].round(0).astype(int),
-    "Sessioni (anno)": plan["sessions_year"].round(0).astype(int),
-    "Sessioni/giorno": plan["sessions_day"].round(1),
-    "Moduli tot": plan["modules"].astype(int),
-    "Moduli A": mods_A.astype(int),
-    "Moduli B": mods_B.astype(int),
-    "Saturazione attesa (%)": (plan["saturation"] * 100).round(1),
-    "Fatturato (€)": plan["ricavi"].round(0).astype(int),
-    "EBITDA (€)": plan["ebitda"].round(0).astype(int),
-    "CAPEX (€)": plan["capex_flow"].round(0).astype(int),
-    "CF netto (€)": plan["cf_netto"].round(0).astype(int),
-    "CF cumulato (€)": plan["cf_cum"].round(0).astype(int),
-}).set_index("Anno")
-
-st.dataframe(df_master, use_container_width=True)
-
-csv = df_master.reset_index().to_csv(index=False).encode("utf-8")
-st.download_button("⬇️ Scarica report CSV", data=csv, file_name=f"report_{province.lower()}_{int(start_year)}_{int(end_year)}.csv", mime="text/csv")
-
-with st.expander("📚 Note modello (cosa è cambiato e perché)", expanded=False):
-    st.markdown(
-        f"""
-### Cosa è cambiato (richiesta: energy-led + moduli 30 kW)
-- La domanda non è più “auto→kWh con un proxy fisso”: ora parte da **parco BEV** × **km/anno** × **consumo**.
-- La quota pubblico è applicata come **quota di energia** (non solo “quota utenti”).
-- La capacità è dimensionata in **moduli da 30 kW** e ottimizzata con un **target di saturazione** (anti-coda).
-- CAPEX è “a scalini” in base ai moduli aggiunti quando serve.
-
-### Come leggere la saturazione
-- Saturazione attesa = energia catturata / (moduli × capacità teorica)
-- Se supera il target: il modello aggiunge moduli → CAPEX sale, ma riduce code/vendite perse.
-
-### Limiti (trasparenti)
-- km/anno e consumo sono parametri: se hai dato locale/telematico, inseriscilo qui per rendere l’output investment-grade.
-- L’analisi OSM misura “densità stazioni” (non kW installati): è un correttivo soft, utile per screening.
-        """
-    )
-
-# ============================================================
-# SEZIONE PROSSIMITÀ (UI)
-# ============================================================
-st.divider()
-st.subheader("🗺️ Sezione Prossimità — Analisi colonnine entro 5 km (OSM/Overpass)")
+st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (OSM/Overpass, 5 km periurbano)")
 
 with st.expander("Impostazioni prossimità", expanded=True):
     site_lat = st.number_input("Latitudine sito", value=38.1157, format="%.6f")
     site_lon = st.number_input("Longitudine sito", value=13.3615, format="%.6f")
+    apply_to_capture = st.checkbox("Usa fattore competizione (OSM) per correggere quota cattura", value=True)
     run_prox = st.button("Esegui analisi prossimità (5 km)")
 
 if run_prox:
@@ -647,10 +825,10 @@ if run_prox:
     if not ok:
         st.error("Impossibile interrogare Overpass (OSM).")
         st.code(err, language="text")
-        st.info("Overpass può essere lento o rate-limited: riprova tra poco.")
+        st.info("Suggerimento: Overpass può essere lento o rate-limited. Riprova tra 1-2 minuti.")
     else:
         if df_poi.empty:
-            st.warning("Nessuna charging_station OSM trovata entro 5 km (o dati OSM incompleti).")
+            st.warning("Nessuna charging_station OSM trovata entro 5 km (oppure dati OSM incompleti).")
             st.session_state["competition_factor"] = 1.0
             st.session_state["competitors_5km"] = df_poi
         else:
@@ -661,6 +839,7 @@ if run_prox:
             c2.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
             c3.metric("Fattore competizione (OSM)", f"{factor:.2f}x")
 
+            # Mappa semplice (no pydeck)
             map_site = pd.DataFrame([{"lat": site_lat, "lon": site_lon}])
             map_comp = df_poi.rename(columns={"Lat": "lat", "Lon": "lon"})[["lat", "lon"]]
             st.map(pd.concat([map_site, map_comp], ignore_index=True))
@@ -668,8 +847,124 @@ if run_prox:
             st.caption("Dettaglio punti (OSM amenity=charging_station)")
             st.dataframe(df_poi, use_container_width=True)
 
+            # Output per il modello
             st.session_state["competition_factor"] = float(factor)
             st.session_state["competitors_5km"] = df_poi
 
-            st.success("Fattore competizione salvato: puoi applicarlo dalla sidebar alla quota cattura.")
+            if apply_to_capture:
+                st.success("Fattore competizione pronto. Applicalo alla quota cattura PRIMA del funnel (vedi nota).")
+            else:
+                st.info("Fattore non applicato: sezione solo informativa.")
 
+            st.markdown(
+                """
+**Nota integrazione nel modello (1 riga):**
+Applica questo moltiplicatore **prima** del calcolo energia/funnel:
+`quota_stazione_eff = quota_stazione * st.session_state.get("competition_factor", 1.0)`
+                """
+            )
+
+
+# ============================================================
+# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
+# ============================================================
+st.divider()
+st.subheader("📊 Sezione 7 — Decision Making: Conviene installare qui?")
+
+# --- Assunzioni standard di settore
+MODULE_KW = 30
+MODULE_COST = 20_000
+UPTIME = 0.97
+EFFICIENCY = 0.95
+ANTI_QUEUE_SAT = 0.80
+
+avg_kwh_session = st.number_input("kWh medi per sessione", value=28.0)
+price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
+energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
+opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
+
+# --- Domanda stimata (auto target giornaliere)
+capture_rate = st.slider("Quota cattura % del parco BEV locale", 0.5, 10.0, 3.0) / 100
+sessions_per_car_year = 45
+
+cars_target_daily = (bev_2024 * capture_rate * sessions_per_car_year) / 365
+
+# --- Capacità per modulo
+hours_day = 24 * UPTIME
+kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
+sessions_day_per_module = kwh_day_per_module / avg_kwh_session
+
+modules_needed = int(np.ceil(cars_target_daily / sessions_day_per_module))
+modules_needed = max(1, modules_needed)
+
+capex = modules_needed * MODULE_COST
+
+# --- Saturazione asset
+asset_saturation = cars_target_daily / (sessions_day_per_module * modules_needed)
+
+# --- Economics
+revenue_session = avg_kwh_session * price_kwh
+cost_session = avg_kwh_session * energy_cost
+margin_session = revenue_session - cost_session
+
+sessions_year = cars_target_daily * 365
+ebitda = sessions_year * margin_session - opex_annual
+cash_flow = ebitda - capex
+
+# --- Output chiave
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Moduli 30 kW necessari", modules_needed)
+c2.metric("CAPEX Totale", eur(capex))
+c3.metric("Saturazione Asset", pct(asset_saturation))
+c4.metric("EBITDA Annuo", eur(ebitda))
+
+decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
+st.markdown(f"### Decisione: **{decision}**")
+
+# ============================================================
+# SEZIONE 8 — Executive Investment Summary
+# ============================================================
+st.subheader("📈 Executive Investment Summary")
+
+years = list(range(2024, 2031))
+cum_cf = 0
+rows = []
+
+for y in years:
+    growth_factor = (1 + cagr_used) ** (y - 2024)
+    cars_y = cars_target_daily * growth_factor
+    sessions_y = cars_y * 365
+    ebitda_y = sessions_y * margin_session - opex_annual
+    cum_cf += ebitda_y - (capex if y == 2024 else 0)
+
+    rows.append({
+        "Anno": y,
+        "Auto target giornaliere": round(cars_y, 1),
+        "Moduli 30kW": modules_needed,
+        "Saturazione Asset %": asset_saturation,
+        "EBITDA": ebitda_y,
+        "CAPEX": capex if y == 2024 else 0,
+        "Cash Flow Cumulato": cum_cf
+    })
+
+df_exec = pd.DataFrame(rows)
+df_exec["Saturazione Asset %"] = df_exec["Saturazione Asset %"].apply(pct)
+df_exec["EBITDA"] = df_exec["EBITDA"].apply(eur)
+df_exec["CAPEX"] = df_exec["CAPEX"].apply(eur)
+df_exec["Cash Flow Cumulato"] = df_exec["Cash Flow Cumulato"].apply(eur)
+
+st.dataframe(df_exec, use_container_width=True)
+
+# ============================================================
+# SEZIONE 9 — Business Driver
+# ============================================================
+st.subheader("🧮 Business Driver")
+
+breakeven_sessions_day = opex_annual / (margin_session * 365)
+
+bd = pd.DataFrame({
+    "Indicatore": ["Margine per Sessione", "Punto di Pareggio (ricariche/giorno)"],
+    "Valore": [eur(margin_session), round(breakeven_sessions_day, 1)]
+})
+
+st.table(bd)
