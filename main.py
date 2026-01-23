@@ -663,7 +663,7 @@ with st.expander("📚 Intelligence Report (spiegazioni + limiti + allineamento 
         """
     )
 # =============================
-# SEZIONE 6 — COMPETITOR 5 KM (OSM/OVERPASS) + INDIRIZZO (NOMINATIM)
+# SEZIONE 6 — COMPETITOR 5 KM (OSM / OVERPASS - NO API KEY)
 # =============================
 import requests
 import pandas as pd
@@ -679,57 +679,15 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * R * np.arcsin(np.sqrt(a))
 
 @st.cache_data(ttl=60*60)
-def geocode_nominatim(address: str):
-    """
-    Geocoding via Nominatim (OSM) - NO API KEY.
-    Ritorna (ok: bool, lat: float|None, lon: float|None, label: str|None, err: str|None)
-    """
-    address = (address or "").strip()
-    if not address:
-        return False, None, None, None, "Indirizzo vuoto."
-
-    url = "https://nominatim.openstreetmap.org/search"
-    params = {
-        "q": address,
-        "format": "json",
-        "limit": 1,
-    }
-    headers = {
-        # User-Agent obbligatorio per buone pratiche Nominatim
-        "User-Agent": "palermo-charging-suite/1.0 (contact: you@example.com)"
-    }
-
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=25)
-    except requests.exceptions.RequestException as e:
-        return False, None, None, None, f"Errore rete/timeout Nominatim: {e}"
-
-    if r.status_code != 200:
-        txt = (r.text or "").strip()
-        if len(txt) > 800:
-            txt = txt[:800] + "…"
-        return False, None, None, None, f"HTTP {r.status_code} da Nominatim: {txt}"
-
-    try:
-        data = r.json()
-    except ValueError:
-        return False, None, None, None, "Risposta Nominatim non-JSON."
-
-    if not data:
-        return False, None, None, None, "Nessun risultato trovato per l'indirizzo."
-
-    lat = float(data[0]["lat"])
-    lon = float(data[0]["lon"])
-    label = data[0].get("display_name", address)
-    return True, lat, lon, label, None
-
-@st.cache_data(ttl=60*60)
 def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
     """
     Cerca stazioni di ricarica (amenity=charging_station) entro radius_km.
     Ritorna (ok: bool, df: DataFrame, err: str|None)
     """
     radius_m = int(radius_km * 1000)
+
+    # Query Overpass: nodi + ways + relations
+    # NOTA: out center serve per ways/relations
     query = f"""
     [out:json][timeout:25];
     (
@@ -741,7 +699,10 @@ def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
     """
 
     url = "https://overpass-api.de/api/interpreter"
-    headers = {"User-Agent": "palermo-charging-suite/1.0 (contact: you@example.com)"}
+    headers = {
+        # User-Agent "gentile" (riduce chance di blocco)
+        "User-Agent": "palermo-charging-suite/1.0 (contact: you@example.com)"
+    }
 
     try:
         r = requests.post(url, data=query.encode("utf-8"), headers=headers, timeout=35)
@@ -757,13 +718,14 @@ def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
     try:
         data = r.json()
     except ValueError:
-        return False, pd.DataFrame(), "Risposta Overpass non-JSON."
+        return False, pd.DataFrame(), "Risposta Overpass non-JSON (endpoint instabile)."
 
     elements = data.get("elements", [])
     rows = []
     for el in elements:
         tags = el.get("tags", {}) or {}
 
+        # coordinate: node => lat/lon; ways/relations => center
         if el.get("type") == "node":
             lat2 = el.get("lat")
             lon2 = el.get("lon")
@@ -777,10 +739,12 @@ def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
 
         dist = float(haversine_km(lat, lon, lat2, lon2))
 
+        # Metadati utili quando disponibili
         name = tags.get("name", "charging_station")
         operator = tags.get("operator", "")
         capacity = tags.get("capacity", "")
         access = tags.get("access", "")
+        # a volte compaiono socket tags: socket:type2, socket:chademo, socket:ccs...
         sockets = [k for k in tags.keys() if k.startswith("socket:")]
 
         rows.append({
@@ -806,6 +770,7 @@ def competition_factor_osm(df_poi):
     Moltiplicatore 'soft' (0.60–1.00) basato su:
     - n. stazioni nel raggio
     - distanza del competitor più vicino
+    (OSM spesso non ha potenza: qui non usiamo kW)
     """
     if df_poi is None or df_poi.empty:
         return 1.00, {"n_sites": 0, "nearest_km": None}
@@ -813,76 +778,68 @@ def competition_factor_osm(df_poi):
     n_sites = int(len(df_poi))
     nearest_km = float(df_poi["Distanza_km"].min())
 
+    # penalità “morbida” (tarabile)
     pen = 0.00
-    pen += min(0.30, 0.02 * n_sites)                 # fino a -30% densità
+    pen += min(0.30, 0.02 * n_sites)                 # fino a -30% per densità
     pen += min(0.15, 0.10 * max(0, (2.0 - nearest_km)))  # vicino <2 km fino a -15%
 
     factor = max(0.60, 1.00 - pen)
-    return factor, {"n_sites": n_sites, "nearest_km": nearest_km}
+    meta = {"n_sites": n_sites, "nearest_km": nearest_km}
+    return factor, meta
 
 # -----------------------------
 # UI
 # -----------------------------
 st.divider()
-st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (indirizzo, 5 km periurbano)")
+st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (OSM/Overpass, 5 km periurbano)")
 
-with st.expander("Impostazioni", expanded=True):
-    address = st.text_input(
-        "Indirizzo del sito (es. 'Via Roma 1, Palermo' oppure 'Stazione di servizio X, Palermo')",
-        value="Palermo, Sicilia"
-    )
+with st.expander("Impostazioni prossimità", expanded=True):
+    site_lat = st.number_input("Latitudine sito", value=38.1157, format="%.6f")
+    site_lon = st.number_input("Longitudine sito", value=13.3615, format="%.6f")
     apply_to_capture = st.checkbox("Usa fattore competizione (OSM) per correggere quota cattura", value=True)
-    run_prox = st.button("Cerca competitor entro 5 km")
+    run_prox = st.button("Esegui analisi prossimità (5 km)")
 
 if run_prox:
-    ok_geo, lat, lon, label, err_geo = geocode_nominatim(address)
+    ok, df_poi, err = fetch_osm_chargers_overpass(site_lat, site_lon, radius_km=5)
 
-    if not ok_geo:
-        st.error("Geocoding fallito (indirizzo → coordinate).")
-        st.code(err_geo, language="text")
+    if not ok:
+        st.error("Impossibile interrogare Overpass (OSM).")
+        st.code(err, language="text")
+        st.info("Suggerimento: Overpass può essere lento o rate-limited. Riprova tra 1-2 minuti.")
     else:
-        st.success(f"Coordinate trovate: {lat:.6f}, {lon:.6f}")
-        st.caption(f"Risultato Nominatim: {label}")
-
-        ok, df_poi, err = fetch_osm_chargers_overpass(lat, lon, radius_km=5)
-
-        if not ok:
-            st.error("Impossibile interrogare Overpass (OSM).")
-            st.code(err, language="text")
-            st.info("Suggerimento: Overpass può essere lento/rate-limited. Riprova tra 1–2 minuti.")
+        if df_poi.empty:
+            st.warning("Nessuna charging_station OSM trovata entro 5 km (oppure dati OSM incompleti).")
+            st.session_state["competition_factor"] = 1.0
+            st.session_state["competitors_5km"] = df_poi
         else:
-            if df_poi.empty:
-                st.warning("Nessuna charging_station OSM trovata entro 5 km (o dati OSM incompleti).")
-                st.session_state["competition_factor"] = 1.0
-                st.session_state["competitors_5km"] = df_poi
+            factor, meta = competition_factor_osm(df_poi)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Stazioni nel raggio (5 km)", f"{meta['n_sites']}")
+            c2.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
+            c3.metric("Fattore competizione (OSM)", f"{factor:.2f}x")
+
+            # Mappa semplice (no pydeck)
+            map_site = pd.DataFrame([{"lat": site_lat, "lon": site_lon}])
+            map_comp = df_poi.rename(columns={"Lat": "lat", "Lon": "lon"})[["lat", "lon"]]
+            st.map(pd.concat([map_site, map_comp], ignore_index=True))
+
+            st.caption("Dettaglio punti (OSM amenity=charging_station)")
+            st.dataframe(df_poi, use_container_width=True)
+
+            # Output per il modello
+            st.session_state["competition_factor"] = float(factor)
+            st.session_state["competitors_5km"] = df_poi
+
+            if apply_to_capture:
+                st.success("Fattore competizione pronto. Applicalo alla quota cattura PRIMA del funnel (vedi nota).")
             else:
-                factor, meta = competition_factor_osm(df_poi)
+                st.info("Fattore non applicato: sezione solo informativa.")
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Stazioni nel raggio (5 km)", f"{meta['n_sites']}")
-                c2.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
-                c3.metric("Fattore competizione (OSM)", f"{factor:.2f}x")
-
-                # Mappa semplice
-                map_site = pd.DataFrame([{"lat": lat, "lon": lon}])
-                map_comp = df_poi.rename(columns={"Lat": "lat", "Lon": "lon"})[["lat", "lon"]]
-                st.map(pd.concat([map_site, map_comp], ignore_index=True))
-
-                st.caption("Dettaglio punti (OSM amenity=charging_station)")
-                st.dataframe(df_poi, use_container_width=True)
-
-                st.session_state["competition_factor"] = float(factor)
-                st.session_state["competitors_5km"] = df_poi
-
-                if apply_to_capture:
-                    st.success("Fattore competizione pronto. Applicalo alla quota cattura PRIMA del funnel.")
-                else:
-                    st.info("Fattore non applicato: sezione solo informativa.")
-
-                st.markdown(
-                    """
+            st.markdown(
+                """
 **Nota integrazione nel modello (1 riga):**
 Applica questo moltiplicatore **prima** del calcolo energia/funnel:
 `quota_stazione_eff = quota_stazione * st.session_state.get("competition_factor", 1.0)`
-                    """
-                )
+                """
+            )
