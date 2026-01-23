@@ -5,3 +5,5 @@ pandas>=1.3.0
 # Visualizzazione e grafici
 matplotlib>=3.4.0
 numpy-financial
+import requests
+import pydeck as pdk
