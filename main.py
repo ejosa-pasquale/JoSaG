@@ -1,4 +1,3 @@
-
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -663,3 +662,123 @@ with st.expander("📚 Intelligence Report (spiegazioni + limiti + allineamento 
 - In modalità **CFO** aggiungiamo: tasse, WC, fee roaming, canoni potenza, scenari e tornado (investment-grade).
         """
     )
+# =============================
+# SEZIONE 6 — COMPETITOR 5 KM
+# =============================
+import requests
+import pydeck as pdk
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dlambda = np.radians(lon2 - lon1)
+    a = np.sin(dphi/2)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(dlambda/2)**2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+@st.cache_data(ttl=60*60)
+def fetch_openchargemap(lat, lon, radius_km=5, max_results=300, api_key=""):
+    url = "https://api.openchargemap.io/v3/poi/"
+    params = {
+        "output": "json",
+        "latitude": lat,
+        "longitude": lon,
+        "distance": radius_km,
+        "distanceunit": "KM",
+        "maxresults": max_results,
+        "compact": True,
+        "verbose": False,
+    }
+    headers = {"X-API-Key": api_key} if api_key else {}
+    r = requests.get(url, params=params, headers=headers, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def ocm_to_df(pois, site_lat, site_lon):
+    rows = []
+    for p in pois:
+        addr = p.get("AddressInfo", {}) or {}
+        conns = p.get("Connections", []) or []
+        lat = addr.get("Latitude")
+        lon = addr.get("Longitude")
+        if lat is None or lon is None:
+            continue
+
+        powers = [c.get("PowerKW") for c in conns if c.get("PowerKW") is not None]
+        power_kw_max = max(powers) if powers else None
+        dist_km = float(haversine_km(site_lat, site_lon, lat, lon))
+
+        rows.append({
+            "Nome": p.get("OperatorInfo", {}).get("Title") or addr.get("Title") or "POI",
+            "Comune": addr.get("Town") or "",
+            "Distanza_km": dist_km,
+            "Connessioni": len(conns),
+            "kW_max": power_kw_max,
+            "Lat": lat,
+            "Lon": lon,
+        })
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("Distanza_km")
+    return df
+
+def competition_factor(df_poi):
+    # moltiplicatore “soft” (0.55–1.00) per correggere la quota di cattura
+    if df_poi.empty:
+        return 1.00, {"n_sites": 0, "n_fast": 0, "nearest_km": None}
+
+    n_sites = len(df_poi)
+    n_fast = int((df_poi["kW_max"].fillna(0) >= 50).sum())
+    nearest_km = float(df_poi["Distanza_km"].min())
+
+    pen = 0.00
+    pen += min(0.25, 0.015 * n_sites)
+    pen += min(0.20, 0.03 * n_fast)
+    pen += min(0.15, 0.08 * max(0, (2.0 - nearest_km)))
+
+    factor = max(0.55, 1.00 - pen)
+    return factor, {"n_sites": n_sites, "n_fast": n_fast, "nearest_km": nearest_km}
+
+st.divider()
+st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (competizione entro 5 km)")
+
+with st.expander("Impostazioni prossimità (5 km periurbano)", expanded=True):
+    site_lat = st.number_input("Latitudine sito", value=38.1157, format="%.6f")
+    site_lon = st.number_input("Longitudine sito", value=13.3615, format="%.6f")
+    api_key = st.text_input("OpenChargeMap API Key (opzionale)", value="", type="password")
+    run_prox = st.button("Esegui analisi prossimità")
+
+if run_prox:
+    pois = fetch_openchargemap(site_lat, site_lon, radius_km=5, api_key=api_key)
+    df_poi = ocm_to_df(pois, site_lat, site_lon)
+
+    if df_poi.empty:
+        st.warning("Nessuna colonnina trovata entro 5 km (o dati non disponibili).")
+    else:
+        factor, meta = competition_factor(df_poi)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Siti nel raggio (5 km)", f"{meta['n_sites']}")
+        c2.metric("Siti DC ≥ 50kW (stima)", f"{meta['n_fast']}")
+        c3.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
+        c4.metric("Fattore competizione", f"{factor:.2f}x")
+
+        site_df = pd.DataFrame([{"Lat": site_lat, "Lon": site_lon, "Tipo": "SITO"}])
+        poi_map = df_poi.copy()
+        poi_map["Tipo"] = "COMPETITOR"
+
+        st.pydeck_chart(pdk.Deck(
+            initial_view_state=pdk.ViewState(latitude=site_lat, longitude=site_lon, zoom=12),
+            layers=[
+                pdk.Layer("ScatterplotLayer", data=site_df, get_position='[Lon, Lat]', get_radius=140, pickable=True),
+                pdk.Layer("ScatterplotLayer", data=poi_map, get_position='[Lon, Lat]', get_radius=90, pickable=True),
+            ],
+            tooltip={"text": "{Tipo}\n{Nome}\n{Distanza_km} km\nkW max: {kW_max}\nConn: {Connessioni}"}
+        ))
+
+        st.dataframe(df_poi, use_container_width=True)
+
+        # Output per il resto del modello
+        st.session_state["competition_factor"] = float(factor)
+        st.session_state["competitors_5km"] = df_poi
+        st.success("Salvato: st.session_state['competition_factor'] e st.session_state['competitors_5km']")
