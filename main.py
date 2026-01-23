@@ -1,4 +1,4 @@
-import streamlit as st
+mport streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,7 +8,7 @@ import io
 st.set_page_config(page_title="Executive Charging Suite — Sicilia - eVFSs", layout="wide")
 
 # ============================================================
-# DATI BEV SICILIA (2015–2025) — SORGENTE: input utente
+# DATI BEV SICILIA (2015–2024) — SORGENTE: input utente
 # ============================================================
 BEV_RAW = """Anno\tProvincia\tElettrico
 2015\tAGRIGENTO\t23
@@ -41,7 +41,6 @@ BEV_RAW = """Anno\tProvincia\tElettrico
 2022\tPALERMO\t1066
 2023\tPALERMO\t1530
 2024\tPALERMO\t2144
-2025\tPALERMO\t2350
 2015\tRAGUSA\t16
 2021\tRAGUSA\t337
 2022\tRAGUSA\t586
@@ -120,7 +119,7 @@ with st.sidebar.expander("📈 Anteprima dato + forecast", expanded=False):
     st.write(f"Forecast 2030 ({bev_forecast_method}): **{bev_2030_auto:,}** (CAGR ~ {cagr_used*100:.1f}%)".replace(",", "."))
 
 st.sidebar.header("🕹️ Market Funnel (domanda)")
-with st.sidebar.expander("🌍 Scenario Parco Auto BEV", expanded=True):
+with st.sidebar.expander("🌍 Bacino energetico BEV (kWh)", expanded=True):
     use_auto_bev_2030 = st.checkbox("Usa forecast BEV 2030 dal dataset Sicilia", value=True)
     bev_base_2030 = st.number_input(
         f"Target BEV {province} 2030 (Scenario Base)",
@@ -146,6 +145,7 @@ with st.sidebar.expander("🔧 Scelte Tecniche", expanded=True):
     allocazione = st.radio("Strategia Location", ["Monosito (Tutto in A)", "Multisito (Espansione in B)"], index=0)
     ore_max_giorno = st.slider("Disponibilità Operativa (ore/giorno)", 4, 24, 10)
     kwh_per_sessione = st.number_input("kWh medi richiesti per ricarica", value=35, min_value=5)
+    kwh_annui_per_auto = st.number_input("Consumo annuo medio per BEV (kWh/auto/anno)", value=3000, min_value=500, help="Proxy per convertire il parco BEV in domanda energetica. Se hai dato locale (km/anno × kWh/km), sostituisci qui.")
     uptime = st.slider("Uptime tecnico (%)", 85, 100, 97) / 100
     # Importantissimo: il PDF usa utilizzo medio annuo (30%) per dimensionare
     utilizzo_medio_annuo = st.slider("Utilizzo medio annuo per dimensionamento (PDF) (%)", 10, 80, 30) / 100
@@ -193,12 +193,18 @@ else:
     bev_citta = np.linspace(bev_base_2030 * 0.5, bev_base_2030, len(years)) * stress_bev
     quota_stazione = np.linspace(0.02, target_cattura_2030, len(years)) * stress_cattura
 
-# Funnel
-auto_clienti_anno = bev_citta * public_share * quota_stazione
+# Funnel (ENERGIA) — focus kWh (bacino pubblico → target stazione)
+# 1) Domanda energia totale BEV (kWh/anno)
+energia_tot_bev_kwh = bev_citta * kwh_annui_per_auto
 
-# Strength PDF: conversione in energia annua per auto (proxy dichiarato)
-kwh_annui_per_auto = 3000  # come PDF (proxy)
-energia_kwh = auto_clienti_anno * kwh_annui_per_auto
+# 2) Bacino *pubblico* (kWh/anno): quota di utenti/consumi che passano dal pubblico
+energia_pubblica_kwh = energia_tot_bev_kwh * public_share
+
+# 3) Target catturato dalla stazione (kWh/anno)
+energia_kwh = energia_pubblica_kwh * quota_stazione
+
+# Per reporting (opzionale): “auto equivalenti” catturate
+auto_clienti_anno = energia_kwh / max(kwh_annui_per_auto, 1e-9)
 
 # (B) Capacità/Dimensionamento — due metodi: PDF (kWh/anno) o Session-based (anti-coda)
 metodo_capacita = "PDF kWh/anno (kW×8760×uptime×utilizzo)" if pdf_lock else st.sidebar.selectbox(
@@ -380,30 +386,38 @@ st.divider()
 c1, c2 = st.columns(2)
 
 with c1:
-    st.write("**1) Break-even: soglia di ricariche/giorno per unità**")
-    auto_range = np.linspace(1, 40, 40)
+    st.write("**1) Break-even: soglia di energia (kWh/giorno) per unità**")
 
-    margine_sessione = kwh_per_sessione * (prezzo_kwh - costo_kwh)  # versione base, leggibile
-    costo_fisso_day = (opex_unit + (capex_unit / ammortamento_anni)) / 365
+    # Margine netto per kWh (considero fee roaming % sui ricavi, se attiva)
+    prezzo_netto_kwh = prezzo_kwh * (1 - fee_roaming)
+    margine_kwh = max(0.0, prezzo_netto_kwh - costo_kwh)
+
+    # Costi fissi/giorno per unità (OPEX + ammortamento CAPEX + eventuale canone potenza)
+    costo_fisso_day = (opex_unit + (capex_unit / ammortamento_anni) + (canone_potenza * potenza_kw)) / 365
+
+    # Range kWh/giorno per grafico (dinamico rispetto a potenza e ore disponibili)
+    cap_kwh_day_theoretical = potenza_kw * ore_max_giorno * uptime * saturazione_target
+    kwh_range = np.linspace(10, max(500, cap_kwh_day_theoretical * 1.6), 60)
 
     fig1, ax1 = plt.subplots()
-    ax1.plot(auto_range, (auto_range * margine_sessione) - costo_fisso_day, linewidth=3)
+    ax1.plot(kwh_range, (kwh_range * margine_kwh) - costo_fisso_day, linewidth=3)
     ax1.axhline(0, linestyle='--')
-    ax1.set_xlabel("Ricariche giornaliere per unità")
+    ax1.set_xlabel("kWh/giorno per unità")
     ax1.set_ylabel("Margine giornaliero per unità (€)")
     st.pyplot(fig1)
 
     st.markdown(r"""
 **Formula (operativa)**
-- $N_{BE} = \frac{OPEX_{day} + Amm_{day}}{kWh_{sess}\cdot(P_{vend} - C_{energia})}$
+- $kWh_{BE/day} = rac{OPEX_{day} + Amm_{day} + CanonePot_{day}}{P_{netto} - C_{energia}}$
+- (opz.) $Sessioni_{BE/day} = rac{kWh_{BE/day}}{kWh_{sess}}$
 """)
 
 st.markdown(
     f"""
 **Con gli input attuali**
-- Margine/sessione (solo energia): **{margine_sessione:.2f} €**
-- OPEX + ammortamento (per unità/giorno): **{costo_fisso_day:.2f} € / giorno**
-- Quindi la soglia è dell’ordine di poche ricariche/giorno (dipende da prezzo/costo e OPEX).
+- Margine per kWh (netto fee): **{margine_kwh:.2f} € / kWh**
+- Costi fissi (per unità/giorno): **{costo_fisso_day:.2f} € / giorno**
+- Break-even: **{(costo_fisso_day / max(margine_kwh, 1e-9)):.0f} kWh/giorno per unità** (≈ **{(costo_fisso_day / max(margine_kwh, 1e-9) / max(kwh_per_sessione, 1e-9)):.1f} ricariche/giorno**)
 
 **Come leggerlo**
 - Sopra la linea 0 → la singola colonnina “sta in piedi” (in senso operativo).
@@ -658,7 +672,7 @@ with st.expander("📚 Intelligence Report (spiegazioni + limiti + allineamento 
 - Opzione **PDF lock** per replicare BEV e quota cattura a scalini e la capacità per unità (kW×8760×uptime×utilizzo).
 
 ### Limiti e trasparenza
-- La conversione Auto → kWh usa **{kwh_annui_per_auto} kWh/auto/anno** (proxy): se hai dato locale, sostituiscilo.
+- Il consumo annuo medio per BEV usa **{kwh_annui_per_auto} kWh/auto/anno** (proxy): se hai un dato locale (km/anno × kWh/km), sostituiscilo.
 - In modalità **Base** il cash flow è **EBITDA − CAPEX** (come nel PDF).
 - In modalità **CFO** aggiungiamo: tasse, WC, fee roaming, canoni potenza, scenari e tornado (investment-grade).
         """
@@ -864,40 +878,40 @@ price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
 energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
 opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
 
-# --- Domanda stimata (auto target giornaliere)
-capture_rate = st.slider("Quota cattura % del parco BEV locale", 0.5, 10.0, 3.0) / 100
-sessions_per_car_year = 45
+# --- Domanda stimata (ENERGIA target giornaliera)
+public_share_local = st.slider("Quota ricarica pubblica locale (%)", 10, 80, int(public_share*100) if 'public_share' in globals() else 30) / 100
+capture_rate = st.slider("Quota cattura del bacino pubblico (%)", 0.5, 20.0, 3.0) / 100
 
-cars_target_daily = (bev_2024 * capture_rate * sessions_per_car_year) / 365
+kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_rate) / 365
+sessions_target_day = kwh_target_day / max(avg_kwh_session, 1e-9)
+
 
 # --- Capacità per modulo
 hours_day = 24 * UPTIME
 kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
 sessions_day_per_module = kwh_day_per_module / avg_kwh_session
 
-modules_needed = int(np.ceil(cars_target_daily / sessions_day_per_module))
+modules_needed = int(np.ceil(kwh_target_day / max(kwh_day_per_module, 1e-9)))
 modules_needed = max(1, modules_needed)
 
 capex = modules_needed * MODULE_COST
 
-# --- Saturazione asset
-asset_saturation = cars_target_daily / (sessions_day_per_module * modules_needed)
+# --- Saturazione asset (anti-coda)
+asset_saturation = kwh_target_day / (kwh_day_per_module * modules_needed)
 
-# --- Economics
-revenue_session = avg_kwh_session * price_kwh
-cost_session = avg_kwh_session * energy_cost
-margin_session = revenue_session - cost_session
-
-sessions_year = cars_target_daily * 365
-ebitda = sessions_year * margin_session - opex_annual
+# --- Economics (energia)
+margin_kwh_simple = price_kwh - energy_cost
+kwh_year = kwh_target_day * 365
+ebitda = kwh_year * margin_kwh_simple - opex_annual
 cash_flow = ebitda - capex
 
 # --- Output chiave
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Moduli 30 kW necessari", modules_needed)
-c2.metric("CAPEX Totale", eur(capex))
-c3.metric("Saturazione Asset", pct(asset_saturation))
-c4.metric("EBITDA Annuo", eur(ebitda))
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Target (kWh/giorno)", f"{kwh_target_day:,.0f}".replace(",", "."))
+c2.metric("Moduli 30 kW necessari", modules_needed)
+c3.metric("CAPEX Totale", eur(capex))
+c4.metric("Saturazione Asset", pct(asset_saturation))
+c5.metric("EBITDA Annuo", eur(ebitda))
 
 decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
 st.markdown(f"### Decisione: **{decision}**")
@@ -913,14 +927,15 @@ rows = []
 
 for y in years:
     growth_factor = (1 + cagr_used) ** (y - 2024)
-    cars_y = cars_target_daily * growth_factor
-    sessions_y = cars_y * 365
-    ebitda_y = sessions_y * margin_session - opex_annual
+    kwh_day_y = kwh_target_day * growth_factor
+    kwh_year_y = kwh_day_y * 365
+    ebitda_y = kwh_year_y * margin_kwh_simple - opex_annual
     cum_cf += ebitda_y - (capex if y == 2024 else 0)
 
     rows.append({
         "Anno": y,
-        "Auto target giornaliere": round(cars_y, 1),
+        "Target kWh/giorno": round(kwh_day_y, 0),
+        "Target kWh/anno": round(kwh_year_y, 0),
         "Moduli 30kW": modules_needed,
         "Saturazione Asset %": asset_saturation,
         "EBITDA": ebitda_y,
@@ -941,11 +956,12 @@ st.dataframe(df_exec, use_container_width=True)
 # ============================================================
 st.subheader("🧮 Business Driver")
 
-breakeven_sessions_day = opex_annual / (margin_session * 365)
+breakeven_kwh_day = opex_annual / (max(margin_kwh_simple, 1e-9) * 365)
+breakeven_sessions_day = breakeven_kwh_day / max(avg_kwh_session, 1e-9)
 
 bd = pd.DataFrame({
-    "Indicatore": ["Margine per Sessione", "Punto di Pareggio (ricariche/giorno)"],
-    "Valore": [eur(margin_session), round(breakeven_sessions_day, 1)]
+    "Indicatore": ["Margine per kWh", "Punto di Pareggio (kWh/giorno)", "Punto di Pareggio (ricariche/giorno)"],
+    "Valore": [f"{margin_kwh_simple:.2f} €/kWh", round(breakeven_kwh_day, 0), round(breakeven_sessions_day, 1)]
 })
 
 st.table(bd)
