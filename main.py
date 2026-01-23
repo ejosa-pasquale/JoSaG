@@ -533,8 +533,8 @@ st.markdown("""
 """)
 
 fig5c2, ax = plt.subplots()
-plot_line(ax, years, ricavi_per_col/1000, \"Ricavi per colonnina (k€/anno)\")
-plot_line(ax, years, ebitda_per_col/1000, \"EBITDA per colonnina (k€/anno)\")
+plot_line(ax, years, ricavi_per_col/1000, "Ricavi per colonnina (k€/anno)")
+plot_line(ax, years, ebitda_per_col/1000, "EBITDA per colonnina (k€/anno)")
 ax.set_xlabel("Anno")
 ax.set_ylabel("Valore per colonnina (k€/anno)")
 ax.legend()
