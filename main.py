@@ -1,259 +1,248 @@
-# ============================================================
-# EV CHARGING – BUSINESS INTELLIGENCE EXECUTIVE TOOL
-# ============================================================
-
 import streamlit as st
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+from math import ceil
 
+# =========================
+# CONFIG STREAMLIT
+# =========================
 st.set_page_config(
-    page_title="EV Charging – Executive BI",
+    page_title="BEV Charging – Executive Investment Tool",
     layout="wide"
 )
 
-st.title("⚡ EV Charging – Executive Business Intelligence")
+st.title("🔌 BEV Charging Investment – GM & CFO Dashboard")
 
-# ============================================================
-# SIDEBAR – INPUT STRATEGICI
-# ============================================================
+# =========================
+# INPUT STRATEGICI
+# =========================
+st.sidebar.header("Assunzioni Strategiche")
 
-st.sidebar.header("📊 Input Strategici")
+province = st.sidebar.selectbox("Provincia", ["Catania", "Palermo"])
 
-# --- Scenario BEV
-bev_2024 = st.sidebar.number_input(
-    "Parco BEV 2024 (provincia)",
-    min_value=1_000,
-    value=25_000,
-    step=1_000
+pct_no_garage = st.sidebar.slider(
+    "Quota BEV senza garage",
+    0.30, 0.40, 0.35, 0.01
 )
 
-cagr_used = st.sidebar.slider(
-    "CAGR storico BEV (%)",
-    5.0, 35.0, 22.0
-) / 100
-
-# --- Funnel
-street_share = st.sidebar.slider(
-    "Utenti senza ricarica privata (%)",
-    20, 60, 35
-) / 100
-
-capture_base = st.sidebar.slider(
-    "Capture Rate stazione (%)",
-    1, 20, 5
-) / 100
-
-# --- Parametri energetici
-kwh_annui_per_auto = st.sidebar.number_input(
-    "Consumo annuo medio per auto (kWh)",
-    value=2_200
+capture_rate_base = st.sidebar.slider(
+    "Quota di cattura base",
+    0.05, 0.30, 0.15, 0.01
 )
 
-# --- Parametri tecnici colonnina
-potenza_kw = st.sidebar.selectbox(
-    "Potenza colonnina (kW)",
-    [50, 100, 150, 300],
-    index=1
+price_kwh = st.sidebar.slider(
+    "Prezzo vendita €/kWh",
+    0.55, 0.90, 0.70, 0.01
 )
 
-uptime = st.sidebar.slider(
-    "Uptime tecnico (%)",
-    90, 99, 97
-) / 100
-
-utilizzo_medio = st.sidebar.slider(
-    "Utilizzo medio (%)",
-    5, 40, 18
-) / 100
-
-# --- Prezzi e costi
-prezzo_kwh = st.sidebar.slider(
-    "Prezzo vendita (€ / kWh)",
-    0.40, 1.00, 0.65
+cost_energy = st.sidebar.slider(
+    "Costo energia €/kWh",
+    0.15, 0.40, 0.25, 0.01
 )
 
-costo_kwh = st.sidebar.slider(
-    "Costo energia (€ / kWh)",
-    0.15, 0.45, 0.28
+sessions_per_car = st.sidebar.number_input(
+    "Sessioni / auto / anno",
+    50, 200, 120
 )
 
-# ============================================================
-# FUNZIONI CORE BI
-# ============================================================
-
-def capacity_unit_kwh_year(p_kw, uptime, utilization):
-    return p_kw * 8760 * uptime * utilization
-
-
-def price_elasticity_capture(capture, price, threshold=0.70, elasticity=1.5):
-    if price <= threshold:
-        return capture
-    delta = price - threshold
-    return max(0, capture * (1 - elasticity * delta))
-
-
-# ============================================================
-# ORIZZONTE TEMPORALE
-# ============================================================
-
-years = np.arange(2024, 2031)
-
-# ============================================================
-# STADIO 1 – PARCO BEV
-# ============================================================
-
-bev_forecast = bev_2024 * (1 + cagr_used) ** (years - 2024)
-
-# ============================================================
-# STADIO 2 – TARGET STRADA
-# ============================================================
-
-bev_street = bev_forecast * street_share
-
-# ============================================================
-# STADIO 3 – CATTURA (CON ELASTICITÀ PREZZO)
-# ============================================================
-
-capture_adj = price_elasticity_capture(
-    capture_base,
-    prezzo_kwh
+kwh_per_session = st.sidebar.number_input(
+    "kWh per sessione",
+    20, 80, 40
 )
 
-auto_clienti = bev_street * capture_adj
-energia_kwh = auto_clienti * kwh_annui_per_auto
+power_kw = st.sidebar.selectbox("Potenza colonnina (kW)", [50, 100, 150])
+uptime = 0.95
+utilization = 0.25
 
-# ============================================================
-# DIMENSIONAMENTO DINAMICO UNITÀ
-# ============================================================
-
-cap_kwh_unit = capacity_unit_kwh_year(
-    potenza_kw,
-    uptime,
-    utilizzo_medio
+capex_unit = st.sidebar.number_input(
+    "CAPEX per colonnina (€)",
+    30000, 120000, 60000
 )
 
-n_units = np.ceil(energia_kwh / cap_kwh_unit).astype(int)
-
-# ============================================================
-# ECONOMICS
-# ============================================================
-
-ricavi = energia_kwh * prezzo_kwh
-costi = energia_kwh * costo_kwh
-ebitda = ricavi - costi
-
-# semplice proxy cash flow
-capex_unit = 45_000
-opex_unit = 2_000
-
-capex = np.diff(
-    np.insert(n_units * capex_unit, 0, 0)
+opex_annual = st.sidebar.number_input(
+    "OPEX annuo per colonnina (€)",
+    3000, 15000, 7000
 )
-opex = n_units * opex_unit
 
-cash_flow = ebitda - capex - opex
+# =========================
+# DATI BEV (mock → sostituibile con main-44.py)
+# =========================
+def forecast_bev_2030_mock():
+    return {
+        2025: 6000,
+        2026: 8000,
+        2027: 10500,
+        2028: 13500,
+        2029: 17000,
+        2030: 21000
+    }
 
-# ============================================================
-# LAYOUT PRINCIPALE
-# ============================================================
+bev_forecast = forecast_bev_2030_mock()
 
-col1, col2 = st.columns(2)
+# =========================
+# ELASTICITÀ PREZZO
+# =========================
+def adjusted_capture_rate(price, base_rate):
+    if price <= 0.70:
+        return base_rate
+    delta_cents = (price - 0.70) / 0.01
+    return max(0, base_rate * (1 - 0.015 * delta_cents))
 
-# ============================================================
-# FUNNEL DI CONVERSIONE
-# ============================================================
+capture_rate = adjusted_capture_rate(price_kwh, capture_rate_base)
 
-with col1:
-    st.subheader("🔻 Funnel Street-Capture")
+# =========================
+# CAPACITÀ COLONNINA
+# =========================
+capacity_per_unit = power_kw * 8760 * uptime * utilization
 
-    funnel_vals = [
-        bev_forecast[-1],
-        bev_street[-1],
-        auto_clienti[-1]
-    ]
+# =========================
+# SIMULAZIONE FINANZIARIA
+# =========================
+results = []
 
-    fig, ax = plt.subplots()
-    ax.bar(
-        ["Parco BEV", "Domanda Strada", "Target Stazione"],
-        funnel_vals
-    )
-    ax.set_ylabel("Veicoli / anno")
-    st.pyplot(fig)
+units_installed = 1
+cashflow_cum = 0
+total_capex = capex_unit
 
-# ============================================================
-# SATURAZIONE CAPACITÀ
-# ============================================================
+for year, bev_total in bev_forecast.items():
 
-with col2:
-    st.subheader("📈 Saturazione Capacità")
+    bev_target = bev_total * pct_no_garage
+    bev_captured = bev_target * capture_rate
 
-    units_equivalent = energia_kwh / cap_kwh_unit
+    sessions_year = bev_captured * sessions_per_car
+    energy_demand = sessions_year * kwh_per_session
 
-    fig, ax = plt.subplots()
-    ax.plot(years, units_equivalent, marker="o")
-    ax.axhline(1, linestyle="--", label="Capacità 1 unità")
-    ax.set_ylabel("Unità equivalenti richieste")
-    ax.set_xlabel("Anno")
-    ax.legend()
-    st.pyplot(fig)
+    units_required = ceil(energy_demand / capacity_per_unit)
 
-# ============================================================
-# PROFIT vs PRICE (SWEET SPOT)
-# ============================================================
+    capex = 0
+    if units_required > units_installed:
+        added = units_required - units_installed
+        capex = added * capex_unit
+        units_installed = units_required
+        total_capex += capex
 
-st.subheader("💰 Elasticità Prezzo – Profit vs Price")
+    revenue = energy_demand * price_kwh
+    energy_cost = energy_demand * cost_energy
+    margin = revenue - energy_cost
+    opex = units_installed * opex_annual
+    ebitda = margin - opex
 
-price_range = np.linspace(0.40, 1.00, 30)
-profits = []
+    cashflow = ebitda - capex
+    cashflow_cum += cashflow
 
-for p in price_range:
-    cap_adj = price_elasticity_capture(capture_base, p)
-    energia_adj = bev_street[-1] * cap_adj * kwh_annui_per_auto
-    profits.append(
-        energia_adj * (p - costo_kwh)
-    )
+    results.append([
+        year, bev_total, bev_target, bev_captured,
+        energy_demand, units_installed,
+        revenue, margin, opex, ebitda,
+        capex, cashflow, cashflow_cum
+    ])
+
+df = pd.DataFrame(results, columns=[
+    "Anno", "BEV Totali", "BEV Target", "BEV Catturati",
+    "Domanda kWh", "Colonnine",
+    "Ricavi", "Margine", "OPEX", "EBITDA",
+    "CAPEX", "Cash Flow", "Cash Flow Cumulato"
+])
+
+# =========================
+# KPI EXECUTIVE
+# =========================
+payback_year = df[df["Cash Flow Cumulato"] > 0]["Anno"].min()
+roi_5y = df.iloc[:5]["Cash Flow"].sum() / total_capex
+
+st.subheader("📊 Snapshot Finanziario – CFO View")
+st.dataframe(df.style.format("{:,.0f}"))
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Payback Period", f"{payback_year}")
+col2.metric("ROI 5 anni", f"{roi_5y:.1%}")
+col3.metric("Auto servite / giorno",
+             f"{(df.iloc[0]['BEV Catturati']*sessions_per_car)/365:.1f}")
+
+# =========================
+# WATERFALL FUNNEL
+# =========================
+st.subheader("🚗 Funnel di Mercato")
+
+funnel_values = [
+    df.iloc[0]["BEV Totali"],
+    df.iloc[0]["BEV Target"],
+    df.iloc[0]["BEV Catturati"]
+]
+
+labels = ["Parco BEV", "No Garage", "Catturati"]
 
 fig, ax = plt.subplots()
-ax.plot(price_range, profits, linewidth=3)
-ax.axvline(
-    price_range[np.argmax(profits)],
-    linestyle="--",
-    label="Sweet Spot"
-)
-ax.set_xlabel("Prezzo €/kWh")
-ax.set_ylabel("Margine Operativo (€)")
+ax.bar(labels, funnel_values)
+ax.set_ylabel("Numero Auto")
+st.pyplot(fig)
+
+# =========================
+# SATURAZIONE
+# =========================
+st.subheader("⚡ Saturazione – Domanda vs Capacità")
+
+fig, ax = plt.subplots()
+ax.plot(df["Anno"], df["Domanda kWh"], label="Domanda kWh")
+ax.plot(df["Anno"], df["Colonnine"] * capacity_per_unit,
+        label="Capacità Installata")
 ax.legend()
 st.pyplot(fig)
 
-st.success(
-    f"🎯 Sweet Spot Prezzo ≈ {price_range[np.argmax(profits)]:.2f} €/kWh"
-)
+# =========================
+# SENSITIVITÀ PREZZO
+# =========================
+st.subheader("💶 Sensibilità Prezzo – EBITDA")
 
-# ============================================================
-# TABELLA EXECUTIVE
-# ============================================================
+prices = np.arange(0.55, 0.90, 0.01)
+ebitdas = []
 
-st.subheader("📋 Executive Financial Table")
+for p in prices:
+    cr = adjusted_capture_rate(p, capture_rate_base)
+    bev_cap = df.iloc[0]["BEV Target"] * cr
+    energy = bev_cap * sessions_per_car * kwh_per_session
+    rev = energy * p
+    cost = energy * cost_energy
+    ebitdas.append(rev - cost - opex_annual)
 
-df = pd.DataFrame({
-    "BEV totali": bev_forecast.astype(int),
-    "Target strada": bev_street.astype(int),
-    "Auto catturate": auto_clienti.astype(int),
-    "Energia (kWh)": energia_kwh.astype(int),
-    "Unità richieste": n_units,
-    "Ricavi (€)": ricavi.astype(int),
-    "EBITDA (€)": ebitda.astype(int),
-    "Cash Flow (€)": cash_flow.astype(int)
-}, index=years)
+fig, ax = plt.subplots()
+ax.plot(prices, ebitdas)
+ax.set_xlabel("Prezzo €/kWh")
+ax.set_ylabel("EBITDA")
+st.pyplot(fig)
 
-st.dataframe(df, use_container_width=True)
+opt_price = prices[np.argmax(ebitdas)]
+st.success(f"🎯 Prezzo ottimo per EBITDA: {opt_price:.2f} €/kWh")
 
-# ============================================================
-# KPI FINALI
-# ============================================================
+# =========================
+# TORNADO CHART
+# =========================
+st.subheader("🌪️ Tornado Chart – Rischi Principali")
 
-st.markdown("---")
-st.metric("Unità installate a regime", int(n_units.max()))
-st.metric("EBITDA medio annuo (€)", int(ebitda.mean()))
-st.metric("Cash Flow cumulato (€)", int(cash_flow.sum()))
+base_ebitda = df.iloc[0]["EBITDA"]
+
+risks = {
+    "Adozione BEV": (-0.2, 0.2),
+    "Costo Energia": (-0.3, 0.3),
+    "Quota di Cattura": (-0.25, 0.25)
+}
+
+impact = []
+
+for r, (low, high) in risks.items():
+    impact.append([
+        r,
+        base_ebitda * (1 + low),
+        base_ebitda * (1 + high)
+    ])
+
+df_tornado = pd.DataFrame(impact, columns=["Rischio", "Worst", "Best"])
+
+fig, ax = plt.subplots()
+ax.barh(df_tornado["Rischio"], df_tornado["Best"] - base_ebitda,
+        left=base_ebitda)
+ax.barh(df_tornado["Rischio"], df_tornado["Worst"] - base_ebitda,
+        left=base_ebitda)
+ax.axvline(base_ebitda)
+st.pyplot(fig)
