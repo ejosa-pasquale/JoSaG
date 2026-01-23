@@ -279,8 +279,8 @@ def npv_from_overrides(base_params, overrides):
 # ------------------------------------------------------------
 # UI
 # ------------------------------------------------------------
-st.title("🛡️ Executive Support System — Charging Investment")
-st.markdown("### *Tool chiaro per GM + robusto per CFO: domanda → capacità → margini → ritorno investimento.*")
+st.title("🛡️ Executive Support System — Charging Investment eVFs")
+st.markdown("### domanda → capacità → margini → ritorno investimento *")
 
 years = np.arange(2026, 2036)  # 10 anni: 2026-2035
 focus_year = 2030
