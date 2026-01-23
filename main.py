@@ -408,8 +408,13 @@ with c1:
 
     st.markdown(r"""
 **Formula (operativa)**
-- $kWh_{BE/day} = rac{OPEX_{day} + Amm_{day} + CanonePot_{day}}{P_{netto} - C_{energia}}$
-- (opz.) $Sessioni_{BE/day} = rac{kWh_{BE/day}}{kWh_{sess}}$
+kWh_{\text{BE,day}} =
+\frac{OPEX_{\text{day}} + Amm_{\text{day}} + CanonePot_{\text{day}}}
+{P_{\text{netto}} - C_{\text{energia}}}
+
+\text{(opz.)}\quad Sessioni_{\text{BE,day}} =
+\frac{kWh_{\text{BE,day}}}{kWh_{\text{sess}}}
+
 """)
 
 st.markdown(
