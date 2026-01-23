@@ -7,126 +7,178 @@ import io
 import requests
 from geopy.distance import geodesic
 
-st.set_page_config(page_title="Executive Charging Planner", layout="wide")
+st.set_page_config(page_title="Executive Charging Suite — Sicilia", layout="wide")
 
 # ============================================================
-# 1. DATA REPOSITORY & FORECASTING
+# 1. DATI STORICI E FUNZIONI ORIGINARIE
 # ============================================================
 BEV_RAW = """Anno\tProvincia\tElettrico
-2015\tCATANIA\t87\n2024\tCATANIA\t3254\n2015\tPALERMO\t143\n2024\tPALERMO\t2144""" 
-# (Dati sintetizzati per brevità, il codice usa il dataset completo fornito)
+2015\tAGRIGENTO\t23
+2021\tAGRIGENTO\t166
+2022\tAGRIGENTO\t255
+2023\tAGRIGENTO\t370
+2024\tAGRIGENTO\t521
+2015\tCALTANISSETTA\t11
+2021\tCALTANISSETTA\t91
+2022\tCALTANISSETTA\t147
+2023\tCALTANISSETTA\t207
+2024\tCALTANISSETTA\t313
+2015\tCATANIA\t87
+2021\tCATANIA\t993
+2022\tCATANIA\t1578
+2023\tCATANIA\t2293
+2024\tCATANIA\t3254
+2015\tENNA\t2
+2021\tENNA\t58
+2022\tENNA\t92
+2023\tENNA\t129
+2024\tENNA\t196
+2015\tMESSINA\t179
+2021\tMESSINA\t602
+2022\tMESSINA\t814
+2023\tMESSINA\t1075
+2024\tMESSINA\t1412
+2015\tPALERMO\t143
+2021\tPALERMO\t753
+2022\tPALERMO\t1066
+2023\tPALERMO\t1530
+2024\tPALERMO\t2144
+2015\tRAGUSA\t16
+2021\tRAGUSA\t337
+2022\tRAGUSA\t586
+2023\tRAGUSA\t814
+2024\tRAGUSA\t1071
+2015\tSIRACUSA\t54
+2021\tSIRACUSA\t379
+2022\tSIRACUSA\t560
+2023\tSIRACUSA\t808
+2024\tSIRACUSA\t1138
+2015\tTRAPANI\t37
+2022\tTRAPANI\t395
+2023\tTRAPANI\t560
+2024\tTRAPANI\t795
+"""
 
-def get_forecast(prov):
-    # Logica: CAGR storico 2015-2024 per proiettare il 2030
-    hist = {"PALERMO": [143, 2144], "CATANIA": [87, 3254]} # [2015, 2024]
-    v_start, v_end = hist.get(prov, [100, 1000])
-    cagr = (v_end / v_start) ** (1/9) - 1
-    return v_end, int(v_end * (1 + cagr)**6), cagr
-
-# ============================================================
-# 2. SIDEBAR - PARAMETRI DECISIONALI
-# ============================================================
-st.sidebar.header("🎯 Analisi di Mercato")
-provincia = st.sidebar.selectbox("Area di Studio", ["PALERMO", "CATANIA"])
-bev_2024, bev_2030, cagr_val = get_forecast(provincia)
-
-with st.sidebar.expander("📊 Funnel di Conversione", expanded=True):
-    # 1. Quanti caricano per strada? (Dati medi EU: 30-50%)
-    public_need = st.slider("Auto che caricano su strada (%)", 10, 80, 40) / 100
-    # 2. Quante ne intercettiamo?
-    base_capture = st.slider("Quota Cattura Target (%)", 0.5, 10.0, 3.0) / 100
-    # 3. Elasticità Prezzo
-    prezzo = st.slider("Prezzo Vendita (€/kWh)", 0.40, 0.95, 0.65)
-    # Se il prezzo > 0.70, la cattura scende drasticamente
-    price_sensitivity = max(0.5, 1.5 - prezzo) 
-    final_capture = base_capture * price_sensitivity
-
-with st.sidebar.expander("⚡ Specifiche Tecniche", expanded=True):
-    power_kw = st.selectbox("Potenza Colonnina (kW)", [30, 60, 150])
-    uptime = 0.95
-    kwh_per_auto_anno = 2500 # Consumo medio prelevato da colonnina
-
-# ============================================================
-# 3. EXECUTIVE SUMMARY (RISPOSTE DIRETTE)
-# ============================================================
-st.title(f"📈 Executive Summary: Installazione {provincia}")
-
-# Calcoli quantitativi
-target_cars_2030 = int(bev_2030 * public_need * final_capture)
-total_energy_need = target_cars_2030 * kwh_per_auto_anno
-# Una colonnina DC da 60kW in Sicilia può erogare circa 120.000 kWh/anno (utilizzo 25%)
-cap_max_colonnina = power_kw * 8760 * 0.20 * uptime
-n_colonnine_necessarie = max(1, int(np.ceil(total_energy_need / cap_max_colonnina)))
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.metric("Auto Attese (2030)", f"{bev_2030:,}")
-    st.caption(f"Crescita stimata (CAGR): {cagr_val:.1%}")
-with c2:
-    st.metric("Tua Quota Clienti", f"{target_cars_2030} auto")
-    st.caption(f"Intercettazione reale: {final_capture:.2%}")
-with c3:
-    st.metric("Colonnine Necessarie", f"{n_colonnine_necessarie} unità")
-    st.caption(f"Per coprire {total_energy_need:,.0f} kWh/anno")
+def get_cagr(df, prov):
+    s = df[df["Provincia"] == prov].sort_values("Anno")
+    v_start = s[s["Anno"] == 2015]["Elettrico"].values[0]
+    v_end = s[s["Anno"] == 2024]["Elettrico"].values[0]
+    return (v_end / v_start)**(1/9) - 1
 
 # ============================================================
-# 4. ANALISI GRAFICA DECISIONALE
+# 2. SIDEBAR - PARAMETRI ORIGINARI + MODULI DECISIONALI
 # ============================================================
+df_bev = pd.read_csv(io.StringIO(BEV_RAW), sep="\t")
+st.sidebar.header("🎯 Executive Summary & Inputs")
+
+provincia = st.sidebar.selectbox("Provincia", sorted(df_bev["Provincia"].unique()), index=5)
+cagr_hist = get_cagr(df_bev, provincia)
+bev_2024 = df_bev[(df_bev["Provincia"] == provincia) & (df_bev["Anno"] == 2024)]["Elettrico"].values[0]
+
+with st.sidebar.expander("📈 Funnel di Conversione", expanded=True):
+    # Risposta alla tua domanda: Quante caricano per strada? 
+    # Media Nazionale: 35-45% non ha garage (Fonte: Motus-E)
+    quota_no_garage = st.slider("Percentuale 'No Garage' (Target strada) %", 10, 80, 40) / 100
+    
+    # Risposta: Quale percentuale intercettiamo?
+    quota_cattura = st.slider("Quota Cattura della stazione %", 0.5, 20.0, 5.0) / 100
+    
+    # Risposta: Come varia con il prezzo? (Elasticità)
+    prezzo_vendita = st.slider("Prezzo vendita (€/kWh)", 0.40, 0.95, 0.65)
+    costo_energia = st.number_input("Costo energia (€/kWh)", value=0.30)
+    
+    # Calcolo elasticità: se prezzo > 0.70, la cattura cala
+    elasticita = max(0.1, 1.0 - (prezzo_vendita - 0.55) * 1.5)
+    cattura_reale = quota_cattura * elasticita
+
+# ============================================================
+# 3. LOGICA DI CALCOLO (ORIGINARIA E POTENZIATA)
+# ============================================================
+years = np.arange(2025, 2031)
+parco_stimato = [int(bev_2024 * (1 + cagr_hist)**(i-2024)) for i in years]
+
+# FUNNEL DECISIONALE: Parco -> Domanda Strada -> Cattura Reale
+auto_intercettate = [int(p * quota_no_garage * cattura_reale) for p in parco_stimato]
+kwh_annui_auto = 2500 # Parametro standard
+energia_totale = np.array(auto_intercettate) * kwh_annui_auto
+
+# RISPOSTA: Quante colonnine servono? 
+# Una 60kW DC eroga max ~130MWh/anno al 25% di saturazione
+capacita_max_unita = 60 * 8760 * 0.25 
+n_colonnine = np.ceil(energia_totale / capacita_max_unita).astype(int)
+
+# ============================================================
+# 4. EXECUTIVE SUMMARY (RISPOSTE DIRETTE)
+# ============================================================
+st.title(f"📊 Analisi Decisionale Ricarica Elettrica: {provincia}")
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Auto Attese (2030)", f"{parco_stimato[-1]:,}", f"+{cagr_hist:.1%} CAGR")
+col2.metric("Tua Quota (Auto)", f"{auto_intercettate[-1]}", f"{cattura_reale:.1%} netta")
+col3.metric("Energia Richiesta", f"{energia_totale[-1]/1000:.0f} MWh")
+col4.metric("Colonnine Necessarie", f"{n_colonnine[-1]} unità")
+
 st.divider()
+
+# ============================================================
+# 5. GRAFICI DECISIONALI (NUOVA SEZIONE)
+# ============================================================
+st.subheader("📉 Strumenti per la Decisione")
 g1, g2 = st.columns(2)
 
 with g1:
-    st.subheader("📍 Analisi della Domanda: Quante auto?")
-    anni = np.arange(2024, 2031)
-    auto_stimate = [int(bev_2024 * (1+cagr_val)**(i-2024)) for i in anni]
-    
+    st.write("**A. Analisi del Funnel (Market Share)**")
+    # Grafico che spiega quante auto intercettiamo rispetto al totale
     fig, ax = plt.subplots()
-    ax.bar(anni, auto_stimate, color="#2E86C1", label="Parco Totale")
-    ax.plot(anni, [a * public_need * final_capture for a in auto_stimate], color="red", marker='o', label="Tuoi Clienti")
-    ax.set_ylabel("Numero Veicoli")
-    ax.legend()
+    labels = ['Parco Totale', 'Domanda Strada', 'Tuo Target']
+    vals = [parco_stimato[-1], parco_stimato[-1]*quota_no_garage, auto_intercettate[-1]]
+    ax.bar(labels, vals, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
     st.pyplot(fig)
-    st.info("**Logica:** Il mercato cresce, ma la tua quota dipende dalla posizione e dal prezzo.")
+    st.caption("Questo grafico chiarisce quante auto 'esistono' e quante 'entrano' effettivamente nella tua stazione.")
 
 with g2:
-    st.subheader("💰 Stress Test: Prezzo vs Cattura")
-    prezzi_test = np.linspace(0.40, 1.0, 20)
-    # Curva di elasticità: più costa, meno persone caricano
-    cattura_test = [base_capture * max(0.1, 1.5 - p) for p in prezzi_test]
-    ricavi_test = [p * (target_cars_2030 * kwh_per_auto_anno) * (max(0.1, 1.5-p)/final_capture) for p in prezzi_test]
-
+    st.write("**B. Stress Test Prezzo (Elasticità)**")
+    # Mostra come cambiano i ricavi variando il prezzo
+    range_p = np.linspace(0.40, 1.0, 20)
+    ricavi_sim = [p * (kwh_annui_auto * (parco_stimato[-1] * quota_no_garage * (quota_cattura * max(0.1, 1.0 - (p - 0.55)*1.5)))) for p in range_p]
+    
     fig2, ax2 = plt.subplots()
-    ax2.plot(prezzi_test, ricavi_test, color="green", lw=3)
-    ax2.axvline(prezzo, color="orange", ls="--", label="Tuo Prezzo")
-    ax2.set_xlabel("Prezzo Vendita (€/kWh)")
-    ax2.set_ylabel("Potenziale Ricavo Annuo (€)")
+    ax2.plot(range_p, ricavi_sim, color='green', lw=3)
+    ax2.axvline(prezzo_vendita, color='red', ls='--', label='Tuo Prezzo')
+    ax2.set_xlabel("Prezzo €/kWh")
+    ax2.set_ylabel("Ricavi Potenziali €")
     ax2.legend()
     st.pyplot(fig2)
-    st.info("**Decisore:** Il picco della curva indica il 'Prezzo Ottimo' per massimizzare i ricavi.")
+    st.caption("Il punto di massimo della curva indica il prezzo ideale per non 'scacciare' i clienti.")
 
 # ============================================================
-# 5. TABELLA COMPETITOR (MODULO OSM)
+# 6. MODULO COMPETITOR (ORIGINARIO)
 # ============================================================
 st.divider()
-st.subheader("🔍 Analisi Competitor nell'Area (OSM)")
-# Qui l'utente inserisce le coordinate del suo sito specifico
-lat = st.number_input("Latitudine Sito", value=38.1157)
-lon = st.number_input("Longitudine Sito", value=13.3615)
+st.subheader("🔍 Localizzazione e Competitor (OSM)")
+lat = st.number_input("Latitudine", value=38.1157, format="%.6f")
+lon = st.number_input("Longitudine", value=13.3615, format="%.6f")
 
-def get_osm_data(lat, lon):
-    query = f"""[out:json];node["amenity"~"charging_station"](around:5000,{lat},{lon});out;"""
+def fetch_osm(lat, lon):
     try:
-        res = requests.post("https://overpass-api.de/api/interpreter", data=query, timeout=5).json()
+        query = f"""[out:json];node["amenity"="charging_station"](around:5000,{lat},{lon});out;"""
+        res = requests.post("https://overpass-api.de/api/interpreter", data=query).json()
         return len(res['elements'])
-    except: return "N/D"
+    except: return 0
 
-n_competitors = get_osm_data(lat, lon)
-st.warning(f"Nel raggio di 5km ci sono **{n_competitors}** colonnine esistenti. Questo riduce la tua quota di cattura reale.")
+comp_count = fetch_osm(lat, lon)
+st.warning(f"Trovate {comp_count} stazioni nel raggio di 5km. Se questo numero è alto, considera di ridurre la 'Quota Cattura' nella sidebar.")
 
-st.markdown("""
-### 💡 Conclusione per il Board
-* **Domanda:** Entro il 2030 ci saranno circa **{bev_2030}** auto elettriche nella provincia.
-* **Fabbisogno:** Circa il **{public_need:.0%}** non ha ricarica privata e cercherà colonnine pubbliche.
-* **Capacità:** Con **{n_colonnine_necessarie}** colonnine eviti saturazione e garantisci un servizio fluido.
-* **Rischio Prezzo:** Un prezzo sopra 0.80€/kWh sposta i clienti verso i competitor (vedi Stress Test).
-""".format(bev_2030=bev_2030, public_need=public_need, n_colonnine_necessarie=n_colonnine_necessarie))
+# ============================================================
+# 7. TABELLA BP ORIGINARIA
+# ============================================================
+st.subheader("📋 Piano Finanziario 2025-2030")
+df_bp = pd.DataFrame({
+    "Anno": years,
+    "Parco Circolante": parco_stimato,
+    "Auto Clienti": auto_intercettate,
+    "MWh Erogati": (energia_totale / 1000).astype(int),
+    "Colonnine": n_colonnine,
+    "EBITDA (€)": (energia_totale * (prezzo_vendita - costo_energia)).astype(int)
+}).set_index("Anno")
+st.table(df_bp)
