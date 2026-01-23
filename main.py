@@ -518,7 +518,7 @@ ricavi_per_col = ricavi / np.maximum(n_totale, 1)
 ebitda_per_col = ebitda / np.maximum(n_totale, 1)
 
 fig5c1, ax = plt.subplots()
-plot_line(ax, years, kwh_per_col/1000, \"Carico medio per colonnina (MWh/anno)\")
+plot_line(ax, years, kwh_per_col/1000, "Carico medio per colonnina (MWh/anno)")
 ax.axhline(capacita_unit_kwh_anno/1000, linestyle="--", linewidth=2, label="Capacità utile per colonnina (MWh/anno)")
 ax.set_xlabel("Anno")
 ax.set_ylabel("Energia per colonnina (MWh/anno)")
