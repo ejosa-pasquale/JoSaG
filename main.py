@@ -100,8 +100,8 @@ def forecast_bev_2030(df_hist, province, method="CAGR 2021–2024"):
 # ============================================================
 # HEADER
 # ============================================================
-st.title("🛡️ Executive Support System — Ricarica DC - Service Stations)")
-st.markdown("### eV Field Service *")
+st.title("🛡️ Executive Planning Tool — Fast DC - Service Stations")
+st.markdown("### eV Field Service ")
 
 # ============================================================
 # SIDEBAR — DATI TERRITORIO + FUNNEL
