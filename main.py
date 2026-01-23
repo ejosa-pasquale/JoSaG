@@ -1,4 +1,4 @@
-import streamlit as st
+port streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -488,76 +488,127 @@ with c4:
     """)
 
 # ============================================================
-# 5) Capacità 1 unità vs domanda città + target cattura (e indicatore "quando non basta")
+# ============================================================
+# 5) Domanda, colli di bottiglia e produttività per colonnina
 # ============================================================
 st.divider()
-st.subheader("5) Domanda in crescita e target cattura: **1 unità basta?**")
+st.subheader("Sezione 5 — Domanda, colli di bottiglia e produttività per colonnina")
 
-st.caption(
-    f"Questa sezione confronta: **bacino pubblico** (BEV×quota pubblica), **target cattura** e la **capacità di 1 unità {tecnologia}**."
+# --- Fattore competizione (se presente in Sezione 6)
+comp_factor = st.session_state.get("competition_factor", 1.0)
+quota_stazione_eff = quota_stazione * comp_factor
+
+# --- 5A: BACINO (kWh) = energia totale BEV -> quota pubblica -> target intercettato
+st.write("**5A. Bacino di riferimento (kWh): energia BEV totale, quota pubblica e target intercettato**")
+
+energia_tot_kwh = bev_citta * kwh_annui_per_auto               # kWh/anno totale BEV
+energia_pub_kwh = energia_tot_kwh * public_share               # kWh/anno su ricarica pubblica
+energia_target_kwh = energia_pub_kwh * quota_stazione_eff      # kWh/anno target catturato dalla stazione
+
+fig5a, ax = plt.subplots()
+ax.plot(years, energia_tot_kwh/1e6, marker="o", linewidth=3, label="Energia BEV totale (GWh/anno)")
+ax.plot(years, energia_pub_kwh/1e6, marker="o", linewidth=3, label="Energia su ricarica pubblica (GWh/anno)")
+ax.plot(years, energia_target_kwh/1e6, marker="o", linewidth=3, label="Target stazione (GWh/anno)")
+ax.set_xlabel("Anno")
+ax.set_ylabel("Energia (GWh/anno)")
+ax.legend()
+st.pyplot(fig5a)
+
+st.markdown("""
+**Lettura corretta (bacino = energia pubblica, non #auto):**
+- Il parco BEV genera un fabbisogno energetico annuo (kWh).
+- Solo una **quota** di quell’energia passa dalla ricarica pubblica (**quota pubblica**).
+- Il “bacino catturabile” per la stazione è una **frazione della domanda pubblica** (**quota cattura**),
+  eventualmente corretta dalla competizione (fattore competizione).
+""")
+
+# --- Capacità utile secondo la tua logica (ore_max_giorno)
+# Coerente con: ore_richieste = energia/potenza; ore_disp_asset = ore_max_giorno*365
+capacita_unit_kwh_anno = potenza_kw * ore_max_giorno * 365
+capacita_tot_kwh_anno = n_totale * capacita_unit_kwh_anno
+
+# --- 5B: COLLI DI BOTTIGLIA: domanda target vs capacità installata
+st.write("**5B. Colli di bottiglia: domanda target vs capacità installata (quando serve espandere)**")
+
+fig5b, ax = plt.subplots()
+ax.plot(years, energia_target_kwh/1e6, marker="o", linewidth=3, label="Domanda target (GWh/anno)")
+ax.plot(years, capacita_tot_kwh_anno/1e6, marker="o", linewidth=3, label="Capacità installata (GWh/anno)")
+
+over = energia_target_kwh > capacita_tot_kwh_anno
+ax.fill_between(
+    years,
+    energia_target_kwh/1e6,
+    capacita_tot_kwh_anno/1e6,
+    where=over,
+    alpha=0.2,
+    interpolate=True
 )
+ax.set_xlabel("Anno")
+ax.set_ylabel("Energia (GWh/anno)")
+ax.legend()
+st.pyplot(fig5b)
 
-# capacità 1 unità in auto equivalenti (stile PDF: kWh/anno -> auto/anno)
-cap_unit_kwh = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
-cap_unit_auto_eq = cap_unit_kwh / kwh_annui_per_auto
-units_needed_for_target = np.where(cap_unit_auto_eq > 0, auto_clienti_anno / cap_unit_auto_eq, np.nan)
+st.markdown("""
+**Perché questo è “leggibile”:**
+- Se **Domanda target > Capacità installata** ⇒ sei in **bottleneck** (code/perdita clienti/target non raggiunto).
+- Gli anni evidenziati indicano quando l’espansione è giustificata operativamente (non “a sentimento”).
+""")
 
-bev_pubbliche = bev_citta * public_share
+# --- 5C: PRODUTTIVITÀ PER COLONNINA + VALORE ECONOMICO PER COLONNINA
+st.write("**5C. Quanto carica ogni colonnina (kWh e saturazione) e quanto vale (ricavi/EBITDA per colonnina)**")
 
-col5a, col5b = st.columns(2)
-with col5a:
-    st.write("**5A) Bacino pubblico vs target**")
-    fig, ax = plt.subplots()
-    ax.plot(years, bev_pubbliche, marker="o", linewidth=3, label="BEV domanda pubblica (proxy)")
-    ax.plot(years, auto_clienti_anno, marker="o", linewidth=3, label="Target cattura (auto/anno)")
-    ax.set_xlabel("Anno")
-    ax.set_ylabel("Auto/anno")
-    ax.legend()
-    st.pyplot(fig)
+# kWh medi per colonnina / anno (sul target effettivo)
+kwh_per_col = energia_target_kwh / np.maximum(n_totale, 1)
 
-    st.markdown(rf"""
-**Interpretazione**
-- Se il bacino pubblico cresce ma il target resta basso, non è un limite di mercato ma di strategia (cattura).
-- Il target dipende da location, competizione, servizi, prezzo percepito.
+# saturazione media per colonnina (rispetto alla capacità utile scelta)
+sat_col = kwh_per_col / np.maximum(capacita_unit_kwh_anno, 1e-9)
 
-**Con input attuali**
-- Bacino pubblico 2030 ≈ **{bev_pubbliche[-1]:,.0f} auto**
-- Target 2030 ≈ **{auto_clienti_anno[-1]:,.0f} auto** (≈ **{(auto_clienti_anno[-1]/max(bev_pubbliche[-1],1e-9))*100:.1f}%** del bacino)
-    """.replace(",", "."))
+# economics (coerente col tuo modello)
+ricavi = energia_target_kwh * prezzo_kwh
+ebitda = (energia_target_kwh * (prezzo_kwh - costo_kwh)) - (n_totale * opex_unit)
 
-with col5b:
-    st.write("**5B) Quante unità servono per servire il target? (soglia=1)**")
-    fig, ax = plt.subplots()
-    ax.plot(years, units_needed_for_target, marker="o", linewidth=3, label="Unità necessarie (equivalenti)")
-    ax.axhline(1, linestyle="--", linewidth=1)
-    ax.set_xlabel("Anno")
-    ax.set_ylabel("Unità richieste")
-    ax.legend()
-    st.pyplot(fig)
+ricavi_per_col = ricavi / np.maximum(n_totale, 1)
+ebitda_per_col = ebitda / np.maximum(n_totale, 1)
 
-    st.markdown(rf"""
-**Capacità 1 unità (stile PDF)**
-- $kWh_{{unit,anno}} = {potenza_kw}\cdot 8760 \cdot {uptime:.2f} \cdot {utilizzo_medio_annuo:.2f} \approx {cap_unit_kwh:,.0f}$
-- Auto equivalenti/anno: **{cap_unit_auto_eq:,.0f} auto**
+# 5C-1: kWh per colonnina vs capacità per colonnina
+fig5c1, ax = plt.subplots()
+ax.plot(years, kwh_per_col/1000, marker="o", linewidth=3, label="Carico medio per colonnina (MWh/anno)")
+ax.axhline(capacita_unit_kwh_anno/1000, linestyle="--", linewidth=2, label="Capacità utile per colonnina (MWh/anno)")
+ax.set_xlabel("Anno")
+ax.set_ylabel("Energia per colonnina (MWh/anno)")
+ax.legend()
+st.pyplot(fig5c1)
 
-**Come leggere**
-- Se la linea supera 1 → **1 unità non basta** per il target.
-- L’anno in cui supera 1 è un ottimo **indicatore decisionale** (quando servono 2 unità).
-    """.replace(",", "."))
+st.markdown("""
+**Interpretazione (tecnica → operativa):**
+- La curva mostra quanta energia “assorbe” **ogni colonnina** sul target.
+- La linea tratteggiata è la **capacità utile** per colonnina (potenza × ore operative).
+- Quando la curva si avvicina/supera la capacità, sei vicino al collo di bottiglia → serve installare una colonnina aggiuntiva.
+""")
 
-# Indicatore: primo anno in cui 1 unità non basta
-anno_non_basta = None
-for i, y in enumerate(years):
-    if units_needed_for_target[i] > 1:
-        anno_non_basta = int(y)
-        break
+# 5C-2: valore economico per colonnina
+fig5c2, ax = plt.subplots()
+ax.plot(years, ricavi_per_col/1000, marker="o", linewidth=3, label="Ricavi per colonnina (k€/anno)")
+ax.plot(years, ebitda_per_col/1000, marker="o", linewidth=3, label="EBITDA per colonnina (k€/anno)")
+ax.set_xlabel("Anno")
+ax.set_ylabel("Valore per colonnina (k€/anno)")
+ax.legend()
+st.pyplot(fig5c2)
 
-if anno_non_basta:
-    st.warning(f"📌 Indicatore: con gli input attuali, **1 unità non basta a partire dal {anno_non_basta}** (servono ≥ 2 unità).")
-else:
-    st.success("📌 Indicatore: con gli input attuali, **1 unità basta** per tutto l’orizzonte 2026–2030.")
+st.markdown("""
+**Interpretazione (commerciale → finanziaria):**
+- Questo grafico dice “quanto vale una colonnina” in termini di ricavi e EBITDA annuo.
+- È utile per spiegare che l’espansione non è solo tecnica: è legata al valore economico generato per asset.
+""")
 
-# ============================================================
+# KPI rapidi (Executive)
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+kpi1.metric("Domanda pubblica 2030 (GWh)", f"{energia_pub_kwh[-1]/1e6:.2f}")
+kpi2.metric("Target stazione 2030 (GWh)", f"{energia_target_kwh[-1]/1e6:.2f}")
+kpi3.metric("Saturazione media 2030", f"{sat_col[-1]*100:.1f}%")
+kpi4.metric("EBITDA/colonnina 2030 (k€)", f"{ebitda_per_col[-1]/1000:.1f}")
+
+
 # 6) Modalità CFO: scenari Base/Bear/Bull + Tornado
 # ============================================================
 if cfo_mode:
