@@ -6,4 +6,9 @@ pandas>=1.3.0
 matplotlib>=3.4.0
 numpy-financial
 requests
-pydeck 
+streamlit
+numpy
+pandas
+matplotlib
+numpy-financial
+requests
