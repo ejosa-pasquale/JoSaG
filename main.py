@@ -8,7 +8,7 @@ import io
 st.set_page_config(page_title="Executive Charging Suite — Sicilia - eVFSs", layout="wide")
 
 # ============================================================
-# DATI BEV SICILIA (2015–2024) — SORGENTE: input utente
+# DATI BEV SICILIA (2015–2025) — SORGENTE: input utente
 # ============================================================
 BEV_RAW = """Anno\tProvincia\tElettrico
 2015\tAGRIGENTO\t23
@@ -41,6 +41,7 @@ BEV_RAW = """Anno\tProvincia\tElettrico
 2022\tPALERMO\t1066
 2023\tPALERMO\t1530
 2024\tPALERMO\t2144
+2025\tPALERMO\t2350
 2015\tRAGUSA\t16
 2021\tRAGUSA\t337
 2022\tRAGUSA\t586
