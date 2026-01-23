@@ -663,12 +663,12 @@ with st.expander("📚 Intelligence Report (spiegazioni + limiti + allineamento 
         """
     )
 # =============================
-# SEZIONE 6 — COMPETITOR 5 KM
+# SEZIONE 6 — COMPETITOR 5 KM (ROBUSTA)
 # =============================
 import requests
-import pydeck as pdk
 
 def haversine_km(lat1, lon1, lat2, lon2):
+    import numpy as np
     R = 6371.0
     phi1, phi2 = np.radians(lat1), np.radians(lat2)
     dphi = np.radians(lat2 - lat1)
@@ -677,28 +677,83 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * R * np.arcsin(np.sqrt(a))
 
 @st.cache_data(ttl=60*60)
-def fetch_openchargemap(lat, lon, radius_km=5, max_results=300, api_key=""):
+def fetch_openchargemap_safe(lat, lon, radius_km=5, max_results=300, api_key=""):
+    """
+    Ritorna (ok: bool, payload: list|None, err: dict|None)
+    - ok=True => payload è una lista di POI
+    - ok=False => err contiene status_code e messaggio
+    """
     url = "https://api.openchargemap.io/v3/poi/"
     params = {
         "output": "json",
-        "latitude": lat,
-        "longitude": lon,
-        "distance": radius_km,
+        "latitude": float(lat),
+        "longitude": float(lon),
+        "distance": int(radius_km),
         "distanceunit": "KM",
-        "maxresults": max_results,
+        "maxresults": int(max_results),
         "compact": True,
         "verbose": False,
     }
     headers = {"X-API-Key": api_key} if api_key else {}
-    r = requests.get(url, params=params, headers=headers, timeout=30)
-    r.raise_for_status()
-    return r.json()
+
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=25)
+    except requests.exceptions.RequestException as e:
+        return False, None, {
+            "type": "network",
+            "message": str(e),
+            "status_code": None,
+            "hint": "Errore di rete/timeout: verifica che Streamlit Cloud consenta richieste outbound e riprova."
+        }
+
+    # Non usare raise_for_status: gestiamo noi e mostriamo info utile
+    if r.status_code != 200:
+        text = (r.text or "").strip()
+        if len(text) > 800:
+            text = text[:800] + "…"
+        hint = "Errore API."
+        if r.status_code in (401, 403):
+            hint = "Probabile API key mancante/errata o accesso negato. Prova a inserire una API key OpenChargeMap."
+        elif r.status_code == 429:
+            hint = "Rate limit raggiunto (troppe richieste). Aspetta e riprova, o usa una API key."
+        elif 500 <= r.status_code <= 599:
+            hint = "Errore lato server OpenChargeMap. Riprova più tardi."
+
+        return False, None, {
+            "type": "http",
+            "status_code": r.status_code,
+            "message": text if text else "(risposta vuota)",
+            "hint": hint
+        }
+
+    # Parse JSON
+    try:
+        data = r.json()
+    except ValueError:
+        return False, None, {
+            "type": "parse",
+            "status_code": r.status_code,
+            "message": "Risposta non-JSON ricevuta dall'API.",
+            "hint": "Riprova oppure usa una API key. Se persiste, l'endpoint può essere momentaneamente instabile."
+        }
+
+    if not isinstance(data, list):
+        return False, None, {
+            "type": "shape",
+            "status_code": r.status_code,
+            "message": f"Formato inatteso: {type(data)}",
+            "hint": "Riprova o riduci max_results. Se persiste, verifica endpoint/parametri."
+        }
+
+    return True, data, None
 
 def ocm_to_df(pois, site_lat, site_lon):
+    import pandas as pd
     rows = []
     for p in pois:
         addr = p.get("AddressInfo", {}) or {}
         conns = p.get("Connections", []) or []
+
         lat = addr.get("Latitude")
         lon = addr.get("Longitude")
         if lat is None or lon is None:
@@ -706,79 +761,114 @@ def ocm_to_df(pois, site_lat, site_lon):
 
         powers = [c.get("PowerKW") for c in conns if c.get("PowerKW") is not None]
         power_kw_max = max(powers) if powers else None
-        dist_km = float(haversine_km(site_lat, site_lon, lat, lon))
 
+        dist_km = float(haversine_km(site_lat, site_lon, lat, lon))
         rows.append({
-            "Nome": p.get("OperatorInfo", {}).get("Title") or addr.get("Title") or "POI",
+            "Nome": (p.get("OperatorInfo", {}) or {}).get("Title") or addr.get("Title") or "POI",
             "Comune": addr.get("Town") or "",
+            "Indirizzo": addr.get("AddressLine1") or "",
             "Distanza_km": dist_km,
             "Connessioni": len(conns),
             "kW_max": power_kw_max,
-            "Lat": lat,
-            "Lon": lon,
+            "Lat": float(lat),
+            "Lon": float(lon),
         })
+
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values("Distanza_km")
     return df
 
 def competition_factor(df_poi):
-    # moltiplicatore “soft” (0.55–1.00) per correggere la quota di cattura
-    if df_poi.empty:
+    """
+    Moltiplicatore 'soft' (0.55–1.00) per correggere la quota di cattura.
+    Pesa:
+    - densità siti nel raggio
+    - presenza DC >= 50 kW
+    - competitor molto vicino (<2 km)
+    """
+    if df_poi is None or df_poi.empty:
         return 1.00, {"n_sites": 0, "n_fast": 0, "nearest_km": None}
 
-    n_sites = len(df_poi)
+    n_sites = int(len(df_poi))
     n_fast = int((df_poi["kW_max"].fillna(0) >= 50).sum())
     nearest_km = float(df_poi["Distanza_km"].min())
 
     pen = 0.00
-    pen += min(0.25, 0.015 * n_sites)
-    pen += min(0.20, 0.03 * n_fast)
-    pen += min(0.15, 0.08 * max(0, (2.0 - nearest_km)))
+    pen += min(0.25, 0.015 * n_sites)                 # fino a -25% densità
+    pen += min(0.20, 0.03 * n_fast)                   # fino a -20% fast
+    pen += min(0.15, 0.08 * max(0, (2.0 - nearest_km)))  # vicino (<2km) fino a -15%
 
     factor = max(0.55, 1.00 - pen)
-    return factor, {"n_sites": n_sites, "n_fast": n_fast, "nearest_km": nearest_km}
+    meta = {"n_sites": n_sites, "n_fast": n_fast, "nearest_km": nearest_km}
+    return factor, meta
 
+# -----------------------------
+# UI
+# -----------------------------
 st.divider()
-st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (competizione entro 5 km)")
+st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (competizione entro 5 km periurbano)")
 
-with st.expander("Impostazioni prossimità (5 km periurbano)", expanded=True):
+with st.expander("Impostazioni prossimità", expanded=True):
     site_lat = st.number_input("Latitudine sito", value=38.1157, format="%.6f")
     site_lon = st.number_input("Longitudine sito", value=13.3615, format="%.6f")
-    api_key = st.text_input("OpenChargeMap API Key (opzionale)", value="", type="password")
-    run_prox = st.button("Esegui analisi prossimità")
+    radius_km = 5  # fisso come da tua richiesta (periurbano)
+    max_results = st.slider("Numero massimo risultati (API)", 50, 500, 300)
+    api_key = st.text_input("OpenChargeMap API Key (opzionale ma consigliata)", value="", type="password")
+    apply_to_capture = st.checkbox("Usa il fattore competizione per correggere la quota cattura", value=True)
+    run_prox = st.button("Esegui analisi prossimità (5 km)")
 
 if run_prox:
-    pois = fetch_openchargemap(site_lat, site_lon, radius_km=5, api_key=api_key)
-    df_poi = ocm_to_df(pois, site_lat, site_lon)
+    ok, pois, err = fetch_openchargemap_safe(site_lat, site_lon, radius_km=radius_km, max_results=max_results, api_key=api_key)
 
-    if df_poi.empty:
-        st.warning("Nessuna colonnina trovata entro 5 km (o dati non disponibili).")
+    if not ok:
+        st.error("Impossibile completare l'analisi competitor.")
+        st.write("Dettaglio errore:")
+        st.code(
+            f"type={err.get('type')}\n"
+            f"status_code={err.get('status_code')}\n"
+            f"hint={err.get('hint')}\n\n"
+            f"message:\n{err.get('message')}",
+            language="text"
+        )
+        st.info("L’app continua a funzionare: questa sezione è opzionale.")
     else:
-        factor, meta = competition_factor(df_poi)
+        df_poi = ocm_to_df(pois, site_lat, site_lon)
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Siti nel raggio (5 km)", f"{meta['n_sites']}")
-        c2.metric("Siti DC ≥ 50kW (stima)", f"{meta['n_fast']}")
-        c3.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
-        c4.metric("Fattore competizione", f"{factor:.2f}x")
+        if df_poi.empty:
+            st.warning("Nessuna colonnina trovata entro 5 km (o dati incompleti).")
+            st.session_state["competition_factor"] = 1.0
+            st.session_state["competitors_5km"] = df_poi
+        else:
+            factor, meta = competition_factor(df_poi)
 
-        site_df = pd.DataFrame([{"Lat": site_lat, "Lon": site_lon, "Tipo": "SITO"}])
-        poi_map = df_poi.copy()
-        poi_map["Tipo"] = "COMPETITOR"
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Siti nel raggio (5 km)", f"{meta['n_sites']}")
+            c2.metric("Siti DC ≥ 50 kW (stima)", f"{meta['n_fast']}")
+            c3.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
+            c4.metric("Fattore competizione", f"{factor:.2f}x")
 
-        st.pydeck_chart(pdk.Deck(
-            initial_view_state=pdk.ViewState(latitude=site_lat, longitude=site_lon, zoom=12),
-            layers=[
-                pdk.Layer("ScatterplotLayer", data=site_df, get_position='[Lon, Lat]', get_radius=140, pickable=True),
-                pdk.Layer("ScatterplotLayer", data=poi_map, get_position='[Lon, Lat]', get_radius=90, pickable=True),
-            ],
-            tooltip={"text": "{Tipo}\n{Nome}\n{Distanza_km} km\nkW max: {kW_max}\nConn: {Connessioni}"}
-        ))
+            # Mappa semplice (nessuna dipendenza extra)
+            map_df = df_poi.rename(columns={"Lat": "lat", "Lon": "lon"})[["lat", "lon"]].copy()
+            map_site = pd.DataFrame([{"lat": site_lat, "lon": site_lon}])
+            st.map(pd.concat([map_site, map_df], ignore_index=True))
 
-        st.dataframe(df_poi, use_container_width=True)
+            st.caption("Tabella dettagli competitor (entro 5 km)")
+            st.dataframe(df_poi, use_container_width=True)
 
-        # Output per il resto del modello
-        st.session_state["competition_factor"] = float(factor)
-        st.session_state["competitors_5km"] = df_poi
-        st.success("Salvato: st.session_state['competition_factor'] e st.session_state['competitors_5km']")
+            # Salvataggio per usarlo nel resto del modello
+            st.session_state["competition_factor"] = float(factor)
+            st.session_state["competitors_5km"] = df_poi
+
+            if apply_to_capture:
+                st.success("Fattore competizione pronto: applicalo alla quota cattura (vedi nota sotto).")
+            else:
+                st.info("Hai scelto di NON applicare il fattore competizione ai calcoli: resta solo informativo.")
+
+            st.markdown(
+                """
+**Nota integrazione nel modello (1 riga):**
+Se vuoi che i KPI cambino davvero, applica questo moltiplicatore **prima** del calcolo del funnel:
+`quota_stazione_eff = quota_stazione * st.session_state.get("competition_factor", 1.0)`
+                """
+            )
