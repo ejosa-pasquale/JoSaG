@@ -5,11 +5,12 @@ import matplotlib.pyplot as plt
 import numpy_financial as npf
 import io
 import requests
+from geopy.distance import geodesic
 
 # ============================================================
-# 1. DATI STORICI E CONFIGURAZIONE
+# 1. SETUP & DATA REPOSITORY
 # ============================================================
-st.set_page_config(page_title="Executive Charging Suite — Sicilia", layout="wide")
+st.set_page_config(page_title="eV Charging Executive Suite", layout="wide")
 
 BEV_RAW = """Anno\tProvincia\tElettrico
 2015\tAGRIGENTO\t23
@@ -58,152 +59,168 @@ BEV_RAW = """Anno\tProvincia\tElettrico
 2024\tTRAPANI\t795
 """
 
-def eur(x):
-    if x is None or not np.isfinite(x): return "n/a"
-    return f"€ {x:,.0f}".replace(",", ".")
+# ============================================================
+# 2. FUNZIONI TECNICHE & FORMULE
+# ============================================================
+def fetch_osm_competitors(lat, lon, radius_km=5):
+    query = f"""[out:json];node["amenity"="charging_station"](around:{radius_km*1000},{lat},{lon});out;"""
+    try:
+        response = requests.post("https://overpass-api.de/api/interpreter", data=query, timeout=10)
+        data = response.json()
+        points = []
+        for e in data['elements']:
+            dist = geodesic((lat, lon), (e['lat'], e['lon'])).km
+            points.append({"Lat": e['lat'], "Lon": e['lon'], "Distanza (km)": round(dist, 2)})
+        return pd.DataFrame(points)
+    except:
+        return pd.DataFrame()
 
-def forecast_bev_2030(df_hist, province, method):
-    s = df_hist[df_hist["Provincia"] == province].sort_values("Anno")
-    bev_2024 = int(s[s["Anno"] == 2024]["Elettrico"].iloc[0])
-    if method == "CAGR 2021–2024":
-        v0, v1 = float(s[s["Anno"] == 2021]["Elettrico"].iloc[0]), float(s[s["Anno"] == 2024]["Elettrico"].iloc[0])
-        years_diff = 3
-    else:
-        v0, v1 = float(s[s["Anno"] == 2015]["Elettrico"].iloc[0]), float(s[s["Anno"] == 2024]["Elettrico"].iloc[0])
-        years_diff = 9
-    cagr = (v1 / max(v0, 1)) ** (1 / years_diff) - 1
-    return bev_2024, int(round(bev_2024 * ((1 + cagr) ** 6))), cagr
+def calc_metrics(capex, opex, rev_per_kwh, cost_per_kwh, kwh_total, tax, wacc):
+    ebitda = (kwh_total * (rev_per_kwh - cost_per_kwh)) - opex
+    taxes = np.maximum(0, ebitda * tax)
+    fcf = ebitda - taxes
+    return fcf
 
 # ============================================================
-# 2. SIDEBAR - TUTTI I PARAMETRI RIPRISTINATI
+# 3. SIDEBAR: INPUT COMPLETI
 # ============================================================
 df_bev = pd.read_csv(io.StringIO(BEV_RAW), sep="\t")
-st.sidebar.header("🗺️ Territorio & Funnel")
-province_list = sorted(df_bev["Provincia"].unique())
-provincia = st.sidebar.selectbox("Provincia", province_list, index=province_list.index("PALERMO"))
-bev_method = st.sidebar.selectbox("Metodo Forecast", ["CAGR 2021–2024", "CAGR 2015–2024"])
-bev_2024, bev_2030_auto, cagr_used = forecast_bev_2030(df_bev, provincia, bev_method)
+st.sidebar.title("🎮 Pannello di Controllo")
 
-with st.sidebar.expander("🎯 Market Funnel", expanded=True):
-    target_bev_2030 = st.number_input(f"Target BEV {provincia} 2030", value=bev_2030_auto)
-    public_share = st.slider("Quota Ricarica Pubblica (%)", 10, 80, 30) / 100
-    target_cattura = st.slider("Quota Cattura Target (%)", 0.5, 20.0, 5.0) / 100
+with st.sidebar.expander("📍 Localizzazione & Competitor", expanded=True):
+    provincia = st.selectbox("Seleziona Provincia", sorted(df_bev["Provincia"].unique()), index=5)
+    site_lat = st.number_input("Latitudine Sito", value=38.1157, format="%.6f")
+    site_lon = st.number_input("Longitudine Sito", value=13.3615, format="%.6f")
+    radius = st.slider("Raggio Analisi Competitor (km)", 1, 10, 5)
 
-with st.sidebar.expander("⚙️ Tecnica & Operatività", expanded=True):
-    tecnologia = st.selectbox("Tecnologia", ["DC 30 kW", "DC 60 kW"])
-    ore_max = st.slider("Ore operative/giorno", 4, 24, 10)
-    kwh_sess = st.number_input("kWh medi/sessione", value=35)
-    uptime = st.slider("Uptime (%)", 85, 100, 97) / 100
-    util_medio = st.slider("Utilizzo medio annuo (%)", 10, 80, 30) / 100
+with st.sidebar.expander("📈 Modello di Mercato", expanded=True):
+    quota_cattura_base = st.slider("Quota Cattura Target (%)", 0.5, 20.0, 5.0) / 100
+    public_share = st.slider("Affidamento a Pubblico (%)", 10, 80, 40) / 100
+    kwh_annui_auto = st.number_input("Consumo Annuo/Auto (kWh)", value=3000)
 
-with st.sidebar.expander("💰 Finanza Avanzata (CFO)", expanded=False):
-    cfo_mode = st.checkbox("Attiva Modalità CFO", value=True)
-    wacc = st.slider("WACC (%)", 4, 12, 8) / 100
-    tax_rate = st.slider("Tax (%)", 0, 40, 28) / 100
-    prezzo_kwh = st.number_input("Prezzo vendita (€/kWh)", value=0.69)
-    costo_kwh = st.number_input("Costo energia (€/kWh)", value=0.30)
-    fee_roaming = st.slider("Fee Roaming (%)", 0.0, 15.0, 0.0) / 100
-    ammortamento_anni = st.slider("Ammortamento (anni)", 3, 12, 5)
+with st.sidebar.expander("💸 Parametri Economici", expanded=True):
+    prezzo_vendita = st.number_input("Prezzo (€/kWh)", value=0.65)
+    costo_energia = st.number_input("Costo (€/kWh)", value=0.28)
+    capex_stazione = st.number_input("CAPEX per singola colonnina (€)", value=45000)
+    opex_annuo = st.number_input("OPEX annuo (Manutenzione/Suolo) (€)", value=3500)
+    wacc = st.slider("WACC (Sconto Finanziario) %", 4, 12, 8) / 100
 
 # ============================================================
-# 3. LOGICA DI CALCOLO (VERSIONE COMPLETA)
+# 4. ANALISI COMPETITOR & FATTORE DI EROSIONE
 # ============================================================
-years = np.array([2026, 2027, 2028, 2029, 2030])
-bev_citta = np.linspace(bev_2024, target_bev_2030, len(years))
-quota_staz = np.linspace(0.02, target_cattura, len(years))
-auto_clienti = bev_citta * public_share * quota_staz
-energia_kwh = auto_clienti * 3000 # Proxy PDF
-potenza_kw = 30 if tecnologia == "DC 30 kW" else 60
+st.title("⚡ Executive EV Charging Business Planner")
 
-# Dimensionamento a scalini
-cap_kwh_unit = potenza_kw * 8760 * uptime * util_medio
-n_totale = np.ceil(energia_kwh / max(cap_kwh_unit, 1e-9)).astype(int)
-
-# Flussi Economici
-capex_unit = 25000 if tecnologia == "DC 30 kW" else 45000
-opex_unit = 2000 if tecnologia == "DC 30 kW" else 3500
-ricavi = energia_kwh * prezzo_kwh
-costi_en = energia_kwh * costo_kwh
-ebitda = (ricavi - costi_en - (ricavi * fee_roaming)) - (n_totale * opex_unit)
-
-capex_flow = np.zeros(len(years))
-prev_n = 0
-for i, n in enumerate(n_totale):
-    if n > prev_n:
-        capex_flow[i] = (n - prev_n) * capex_unit
-    prev_n = n
+df_comp = fetch_osm_competitors(site_lat, site_lon, radius)
+comp_factor = 1.0
+if not df_comp.empty:
+    n_comp = len(df_comp)
+    min_dist = df_comp["Distanza (km)"].min()
+    # Formula empirica: ogni competitor riduce la quota cattura del 5%, la vicinanza estrema la dimezza
+    comp_factor = max(0.2, 1.0 - (n_comp * 0.05) - (0.1 / max(min_dist, 0.1)))
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Competitor Rilevati", n_comp)
+    c2.metric("Distanza Minima", f"{min_dist} km")
+    c3.metric("Fattore Erosione Quota", f"{comp_factor:.2f}x")
+    st.map(df_comp.rename(columns={"Lat":"lat", "Lon":"lon"}))
+else:
+    st.info("Nessun competitor rilevato nel raggio selezionato. Fattore competizione: 1.0x")
 
 # ============================================================
-# 4. MODULO COMPETITOR (OSM / OVERPASS)
+# 5. CALCOLO EVOLUTIVO (2025-2030)
 # ============================================================
-def fetch_osm(lat, lon, r=5):
-    query = f"""[out:json];(node["amenity"="charging_station"](around:{r*1000},{lat},{lon}););out center;"""
-    try:
-        res = requests.post("https://overpass-api.de/api/interpreter", data=query, timeout=10).json()
-        return pd.DataFrame([{"lat": e["lat"], "lon": e["lon"], "name": e.get("tags",{}).get("name","N/D")} for e in res["elements"]])
-    except: return pd.DataFrame()
+years = np.array([2025, 2026, 2027, 2028, 2029, 2030])
+# Proiezione parco auto locale (Semplificata basata su dati storici)
+bev_last = df_bev[df_bev["Provincia"] == provincia]["Elettrico"].iloc[-1]
+bev_growth = bev_last * (1.25 ** (years - 2024)) # Ipotizziamo crescita 25% annua
 
-st.title("🛡️ Executive Charging Suite — Sicilia")
-col_lat, col_lon, col_btn = st.columns([2,2,1])
-lat = col_lat.number_input("Latitudine", value=38.1157, format="%.6f")
-lon = col_lon.number_input("Longitudine", value=13.3615, format="%.6f")
-if col_btn.button("🔍 Analisi Prossimità"):
-    df_poi = fetch_osm(lat, lon)
-    if not df_poi.empty:
-        st.write(f"Trovate {len(df_poi)} stazioni nel raggio di 5km.")
-        st.map(df_poi)
-    else: st.warning("Nessun competitor trovato.")
+# Funnel: Parco -> Domanda Pubblica -> Quota Cattura (Erosa da Competitor)
+auto_target = bev_growth * public_share * (quota_cattura_base * comp_factor)
+kwh_totali = auto_target * kwh_annui_auto
+
+# Dimensionamento colonnine (1 ogni 150.000 kWh/anno circa)
+n_colonnine = np.ceil(kwh_totali / 150000).astype(int)
+capex_total = n_colonnine * capex_stazione
+# Per semplicità, ipotizziamo investimento tutto all'anno 0 (2025)
+opex_total = n_colonnine * opex_annuo
+ebitda = (kwh_totali * (prezzo_vendita - costo_energia)) - opex_total
 
 # ============================================================
-# 5. GRAFICI DECISIONALI & KPI
+# 6. GRAFICI DECISIONALI E SPIEGAZIONI
 # ============================================================
 st.divider()
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Payback Anno", years[np.where(np.cumsum(ebitda - capex_flow) > 0)[0][0]] if any(np.cumsum(ebitda - capex_flow) > 0) else "Oltre 2030")
-m2.metric("EBITDA 2030", eur(ebitda[-1]))
-m3.metric("Unità Necessarie", n_totale[-1])
-m4.metric("ROI Semplice", f"{(ebitda.sum()/capex_flow.sum()*100):.0f}%")
+st.subheader("📊 Analisi delle Performance Economiche")
 
-c1, c2 = st.columns(2)
-with c1:
-    st.write("**Soglia di Sopravvivenza (Ricariche/Giorno)**")
-    margine_sess = kwh_sess * (prezzo_kwh - costo_kwh)
-    costo_f_gg = (opex_unit + (capex_unit/ammortamento_anni)) / 365
-    x = np.linspace(0, 15, 100)
+col1, col2 = st.columns(2)
+
+with col1:
+    st.write("**Cash Flow Cumulato & Break Even**")
+    cash_flow = ebitda.copy()
+    cash_flow[0] -= capex_total[0] # Investimento iniziale
+    cum_cf = np.cumsum(cash_flow)
+    
     fig, ax = plt.subplots()
-    ax.plot(x, (x * margine_sess) - costo_f_gg, lw=3)
-    ax.axhline(0, color='red', ls='--')
-    ax.fill_between(x, (x * margine_sess) - costo_f_gg, 0, where=((x * margine_sess) - costo_f_gg > 0), color='green', alpha=0.1)
-    ax.set_xlabel("Ricariche/Giorno per Unità")
+    ax.bar(years, cash_flow, color='skyblue', label='Flusso Annuo')
+    ax.plot(years, cum_cf, color='red', marker='o', label='Cumulato')
+    ax.axhline(0, color='black', linewidth=1)
+    ax.set_title("Rientro dell'Investimento (Payback)")
+    ax.legend()
     st.pyplot(fig)
+    
+    st.markdown("""
+    > **Cosa osservare:** Il punto in cui la linea rossa incrocia lo zero è il tuo **Break-Even Point**. 
+    > Se avviene dopo il 2030, il progetto richiede una revisione dei prezzi o del CAPEX.
+    """)
 
-with c2:
-    st.write("**Cash Flow Cumulato (EBITDA - CAPEX)**")
+with col2:
+    st.write("**Analisi di Sensibilità (Tornado Chart)**")
+    # Simulazione impatto variazione +/- 10% sui parametri chiave al 2030
+    base_ebitda = ebitda[-1]
+    sens_price = ((prezzo_vendita * 1.1 - costo_energia) * kwh_totali[-1]) - opex_total[-1]
+    sens_cost = ((prezzo_vendita - costo_energia * 1.1) * kwh_totali[-1]) - opex_total[-1]
+    sens_vol = (kwh_totali[-1] * 1.1 * (prezzo_vendita - costo_energia)) - opex_total[-1]
+    
+    labels = ['Prezzo (+10%)', 'Costo Energia (+10%)', 'Volumi (+10%)']
+    impacts = [sens_price - base_ebitda, sens_cost - base_ebitda, sens_vol - base_ebitda]
+    
     fig2, ax2 = plt.subplots()
-    ax2.plot(years, np.cumsum(ebitda - capex_flow), marker='o', lw=3)
-    ax2.axhline(0, color='black', lw=1)
+    ax2.barh(labels, impacts, color=['green' if i > 0 else 'red' for i in impacts])
+    ax2.set_title("Impatto sull'EBITDA 2030")
     st.pyplot(fig2)
 
 # ============================================================
-# 6. REPORT ANALITICO COMPLETO
+# 7. GLOSSARIO & FORMULE TECNICHE
 # ============================================================
-st.divider()
-st.subheader("📊 Report Analitico Dettagliato")
-df_master = pd.DataFrame({
-    "Anno": years,
-    "BEV Provincia": bev_citta.astype(int),
-    "Auto Target": auto_clienti.astype(int),
-    "Energia (kWh)": energia_kwh.astype(int),
-    "Unità Totali": n_totale,
-    "Ricavi (€)": ricavi.astype(int),
-    "EBITDA (€)": ebitda.astype(int),
-    "CAPEX (€)": capex_flow.astype(int)
-}).set_index("Anno")
-st.dataframe(df_master, use_container_width=True)
+with st.expander("📚 Glossario, Formule e Logica del Modello"):
+    st.markdown(r"""
+    ### 1. Il Funnel di Vendita
+    Il numero di auto che caricheranno da te è calcolato come:
+    $$Auto_{Target} = Parco_{Elettrico} \times \%Pubblico \times (Quota_{Cattura} \times Fattore_{Competitor})$$
+    
+    ### 2. Sostenibilità Energetica
+    Ogni colonnina DC ha una capacità limitata. Il numero di unità $N$ cresce quando:
+    $$N = \lceil \frac{kWh_{totali}}{Capacità_{max}} \rceil$$
+    Dove la $Capacità_{max}$ è stimata in circa 150.000 kWh/anno (pari a circa 12 sessioni/giorno).
+    
+    ### 3. Fattore Competitor (OSM)
+    Il modello interroga il database OpenStreetMap. Il fattore di erosione riduce la tua quota di cattura basandosi sulla densità di stazioni esistenti:
+    - Più stazioni ci sono nel raggio di 5km, più si riduce la tua probabilità di attrarre l'utente casuale.
+    
+    ### 4. Indicatori Finanziari
+    - **EBITDA**: Ricavi lordi meno costi energetici e operativi.
+    - **NPV (VAN)**: Valore Attuale Netto. Se $> 0$, l'investimento rende più del WACC (costo del capitale).
+    """)
 
-if cfo_mode:
-    st.subheader("🏦 Analisi Investment-Grade (NPV/IRR)")
-    fcf = ebitda * (1 - tax_rate) - capex_flow
-    npv = npf.npv(wacc, fcf)
-    irr = npf.irr(fcf)
-    st.write(f"**VAN (NPV):** {eur(npv)} | **TIR (IRR):** {irr*100:.1f}%")
+# Report Finale
+st.subheader("📋 Tabella Riassuntiva per il Board")
+df_res = pd.DataFrame({
+    "Anno": years,
+    "Parco BEV Stimato": bev_growth.astype(int),
+    "Tua Quota (Auto)": auto_target.astype(int),
+    "Erogazione (MWh)": (kwh_totali / 1000).round(1),
+    "Colonnine Attive": n_colonnine,
+    "EBITDA (€)": ebitda.astype(int),
+    "Cash Flow Cum. (€)": cum_cf.astype(int)
+}).set_index("Anno")
+
+st.table(df_res)
