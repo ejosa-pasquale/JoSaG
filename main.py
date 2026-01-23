@@ -127,14 +127,9 @@ with st.sidebar.expander("🌍 Scenario Parco Auto BEV", expanded=True):
         min_value=0
     )
     stress_bev = st.slider("Stress Test Adozione BEV (%)", 50, 150, 100) / 100
-
-    st.markdown("**Intensità d'uso (per tradurre auto → energia)**")
-    km_annui_per_bev = st.number_input("Km/anno per BEV (media)", value=15000, step=500, min_value=1000)
-    kwh_100km = st.number_input("Consumo medio (kWh/100km)", value=20.0, step=0.5, min_value=8.0)
-
     public_share = st.slider(
-        "Quota energia ricaricata su pubblico (%)", 5, 80, 30,
-        help="NON è % di auto: è la quota di ENERGIA totale (dei BEV) che passa da ricarica pubblica."
+        "Quota Ricarica Pubblica (%)", 10, 80, 30,
+        help="Percentuale di proprietari BEV senza ricarica privata (domanda che va sul pubblico)."
     ) / 100
 
 with st.sidebar.expander("🎯 Strategia di Cattura", expanded=True):
@@ -197,19 +192,12 @@ else:
     bev_citta = np.linspace(bev_base_2030 * 0.5, bev_base_2030, len(years)) * stress_bev
     quota_stazione = np.linspace(0.02, target_cattura_2030, len(years)) * stress_cattura
 
-# Funnel (energy-led)
-# kWh/BEV/anno (default coerente col PDF: 15.000 km × 20 kWh/100km = 3.000 kWh)
-kwh_annui_per_auto = (km_annui_per_bev * kwh_100km) / 100.0
+# Funnel
+auto_clienti_anno = bev_citta * public_share * quota_stazione
 
-# Energia totale BEV e quota che passa sul pubblico (public_share = quota ENERGIA, non quota AUTO)
-energia_bev_tot_kwh = bev_citta * kwh_annui_per_auto
-energia_pubblica_kwh = energia_bev_tot_kwh * public_share
-
-# Energia catturata dalla stazione (quota_stazione applicata all'energia pubblica)
-energia_kwh = energia_pubblica_kwh * quota_stazione
-
-# Per chi ragiona "a numero auto": auto equivalenti servite (proxy)
-auto_clienti_anno = np.where(kwh_annui_per_auto > 0, energia_kwh / kwh_annui_per_auto, 0)
+# Strength PDF: conversione in energia annua per auto (proxy dichiarato)
+kwh_annui_per_auto = 3000  # come PDF (proxy)
+energia_kwh = auto_clienti_anno * kwh_annui_per_auto
 
 # (B) Capacità/Dimensionamento — due metodi: PDF (kWh/anno) o Session-based (anti-coda)
 metodo_capacita = "PDF kWh/anno (kW×8760×uptime×utilizzo)" if pdf_lock else st.sidebar.selectbox(
@@ -511,20 +499,19 @@ st.caption(
 
 # capacità 1 unità in auto equivalenti (stile PDF: kWh/anno -> auto/anno)
 cap_unit_kwh = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
-# Unità necessarie per servire l'energia target (dimensionamento su energia)
-units_needed_for_target = np.where(cap_unit_kwh > 0, energia_kwh / cap_unit_kwh, np.nan)
+cap_unit_auto_eq = cap_unit_kwh / kwh_annui_per_auto
+units_needed_for_target = np.where(cap_unit_auto_eq > 0, auto_clienti_anno / cap_unit_auto_eq, np.nan)
 
-# Per confronto "bacino pubblico": energia pubblica ed equivalente auto (proxy)
-bev_pubbliche = np.where(kwh_annui_per_auto > 0, energia_pubblica_kwh / kwh_annui_per_auto, 0)
+bev_pubbliche = bev_citta * public_share
 
 col5a, col5b = st.columns(2)
 with col5a:
     st.write("**5A) Bacino pubblico vs target**")
     fig, ax = plt.subplots()
-    ax.plot(years, energia_pubblica_kwh/1000, marker="o", linewidth=3, label="Energia pubblica (MWh/anno)")
-    ax.plot(years, energia_kwh/1000, marker="o", linewidth=3, label="Energia target cattura (MWh/anno)")
+    ax.plot(years, bev_pubbliche, marker="o", linewidth=3, label="BEV domanda pubblica (proxy)")
+    ax.plot(years, auto_clienti_anno, marker="o", linewidth=3, label="Target cattura (auto/anno)")
     ax.set_xlabel("Anno")
-    ax.set_ylabel("MWh/anno")
+    ax.set_ylabel("Auto/anno")
     ax.legend()
     st.pyplot(fig)
 
@@ -534,12 +521,8 @@ with col5a:
 - Il target dipende da location, competizione, servizi, prezzo percepito.
 
 **Con input attuali**
-- Energia pubblica 2030 ≈ **{energia_pubblica_kwh[-1]/1000:,.1f} MWh**
-- Energia target (cattura) 2030 ≈ **{energia_kwh[-1]/1000:,.1f} MWh** (≈ **{(energia_kwh[-1]/max(energia_pubblica_kwh[-1],1e-9))*100:.1f}%** dell'energia pubblica)
-
-> Proxy utile per chi ragiona in auto:  
-> - Bacino pubblico 2030 ≈ **{bev_pubbliche[-1]:,.0f} auto equivalenti**  
-> - Target 2030 ≈ **{auto_clienti_anno[-1]:,.0f} auto equivalenti**
+- Bacino pubblico 2030 ≈ **{bev_pubbliche[-1]:,.0f} auto**
+- Target 2030 ≈ **{auto_clienti_anno[-1]:,.0f} auto** (≈ **{(auto_clienti_anno[-1]/max(bev_pubbliche[-1],1e-9))*100:.1f}%** del bacino)
     """.replace(",", "."))
 
 with col5b:
@@ -646,13 +629,10 @@ st.subheader("📊 Report Analitico: funnel, saturazione, ricavi e ritorno")
 df_master = pd.DataFrame({
     "Anno": years,
     "BEV (scenario)": bev_citta.astype(int),
-    "kWh/BEV/anno (proxy)": np.round(kwh_annui_per_auto, 0).astype(int),
-    "Energia BEV totale (kWh)": energia_bev_tot_kwh.astype(int),
-    "Quota energia su pubblico (%)": (public_share * 100),
-    "Energia pubblica (kWh)": energia_pubblica_kwh.astype(int),
+    "Quota pubblica (%)": (public_share * 100),
     "Quota cattura (%)": (quota_stazione * 100),
-    "Energia target cattura (kWh)": energia_kwh.astype(int),
-    "Auto equivalenti target (anno)": auto_clienti_anno.astype(int),
+    "Auto target (anno)": auto_clienti_anno.astype(int),
+    "Energia (kWh)": energia_kwh.astype(int),
     "Sessioni (anno)": sessioni_anno.astype(int),
     "Sessioni/giorno tot": sessioni_giorno_tot.round(1),
     "Unità tot": n_totale.astype(int),
