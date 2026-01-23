@@ -3,182 +3,130 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy_financial as npf
-import io
-import requests
-from geopy.distance import geodesic
 
-st.set_page_config(page_title="Executive Charging Suite — Sicilia", layout="wide")
+st.set_page_config(page_title="CFO Suite - Investimento DC30", layout="wide")
 
-# ============================================================
-# 1. DATI STORICI E FUNZIONI ORIGINARIE
-# ============================================================
-BEV_RAW = """Anno\tProvincia\tElettrico
-2015\tAGRIGENTO\t23
-2021\tAGRIGENTO\t166
-2022\tAGRIGENTO\t255
-2023\tAGRIGENTO\t370
-2024\tAGRIGENTO\t521
-2015\tCALTANISSETTA\t11
-2021\tCALTANISSETTA\t91
-2022\tCALTANISSETTA\t147
-2023\tCALTANISSETTA\t207
-2024\tCALTANISSETTA\t313
-2015\tCATANIA\t87
-2021\tCATANIA\t993
-2022\tCATANIA\t1578
-2023\tCATANIA\t2293
-2024\tCATANIA\t3254
-2015\tENNA\t2
-2021\tENNA\t58
-2022\tENNA\t92
-2023\tENNA\t129
-2024\tENNA\t196
-2015\tMESSINA\t179
-2021\tMESSINA\t602
-2022\tMESSINA\t814
-2023\tMESSINA\t1075
-2024\tMESSINA\t1412
-2015\tPALERMO\t143
-2021\tPALERMO\t753
-2022\tPALERMO\t1066
-2023\tPALERMO\t1530
-2024\tPALERMO\t2144
-2015\tRAGUSA\t16
-2021\tRAGUSA\t337
-2022\tRAGUSA\t586
-2023\tRAGUSA\t814
-2024\tRAGUSA\t1071
-2015\tSIRACUSA\t54
-2021\tSIRACUSA\t379
-2022\tSIRACUSA\t560
-2023\tSIRACUSA\t808
-2024\tSIRACUSA\t1138
-2015\tTRAPANI\t37
-2022\tTRAPANI\t395
-2023\tTRAPANI\t560
-2024\tTRAPANI\t795
-"""
+st.title("🏛️ Decision Support System: Infrastruttura DC30 kW")
+st.markdown("Analisi strategica e finanziaria per l'installazione di colonnine in stazione di servizio.")
 
-def get_cagr(df, prov):
-    s = df[df["Provincia"] == prov].sort_values("Anno")
-    v_start = s[s["Anno"] == 2015]["Elettrico"].values[0]
-    v_end = s[s["Anno"] == 2024]["Elettrico"].values[0]
-    return (v_end / v_start)**(1/9) - 1
+# --- SIDEBAR: LEVE DECISIONALI VS IPOTESI DI MERCATO ---
+st.sidebar.header("🕹️ Variabili Decisionali (Le tue leve)")
+with st.sidebar.expander("💼 Strategia e Pricing", expanded=True):
+    prezzo_kwh = st.number_input("Prezzo vendita (€/kWh)", value=0.69, step=0.01, help="Lezione commerciale: un prezzo troppo alto riduce la domanda, uno troppo basso erode il margine.")
+    costo_kwh = st.number_input("Costo energia (€/kWh)", value=0.30, step=0.01, help="Prezzo di acquisto dell'energia (materia prima).")
+    capex_unit = st.number_input("CAPEX per unità (€)", value=25000, help="Costo totale di acquisto e installazione (Macchina + Scavi + Allacci).")
+    wacc = st.slider("Costo del Capitale (WACC %)", 4, 12, 8, help="Tasso di rendimento minimo richiesto per giustificare l'investimento.") / 100
 
-# ============================================================
-# 2. SIDEBAR - PARAMETRI ORIGINARI + MODULI DECISIONALI
-# ============================================================
-df_bev = pd.read_csv(io.StringIO(BEV_RAW), sep="\t")
-st.sidebar.header("🎯 Executive Summary & Inputs")
+st.sidebar.header("📊 Ipotesi di Mercato (I Rischi)")
+with st.sidebar.expander("🌍 Scenario Esterno"):
+    crescita_bev = st.slider("Crescita Parco Auto (Stress Test %)", 50, 150, 100, help="Variazione rispetto alle stime ufficiali di adozione elettrica a Palermo.") / 100
+    quota_cattura = st.slider("Capacità di Cattura (%)", 50, 150, 100, help="Efficacia della tua stazione nel catturare clienti rispetto alla concorrenza locale.") / 100
+    utilizzazione_target = st.slider("Soglia Utilizzo Target (%)", 10, 50, 30, help="Livello di saturazione oltre il quale decidi di installare una nuova colonnina.") / 100
 
-provincia = st.sidebar.selectbox("Provincia", sorted(df_bev["Provincia"].unique()), index=5)
-cagr_hist = get_cagr(df_bev, provincia)
-bev_2024 = df_bev[(df_bev["Provincia"] == provincia) & (df_bev["Anno"] == 2024)]["Elettrico"].values[0]
+# --- LOGICA DI CALCOLO (Basata su Report Palermo) ---
+years = np.array([2026, 2027, 2028, 2029, 2030])
+bev_palermo = np.array([2600, 3000, 3500, 4200, 5000]) * crescita_bev
+quota_mercato = np.array([0.02, 0.03, 0.04, 0.045, 0.05]) * quota_cattura
 
-with st.sidebar.expander("📈 Funnel di Conversione", expanded=True):
-    # Risposta alla tua domanda: Quante caricano per strada? 
-    # Media Nazionale: 35-45% non ha garage (Fonte: Motus-E)
-    quota_no_garage = st.slider("Percentuale 'No Garage' (Target strada) %", 10, 80, 40) / 100
-    
-    # Risposta: Quale percentuale intercettiamo?
-    quota_cattura = st.slider("Quota Cattura della stazione %", 0.5, 20.0, 5.0) / 100
-    
-    # Risposta: Come varia con il prezzo? (Elasticità)
-    prezzo_vendita = st.slider("Prezzo vendita (€/kWh)", 0.40, 0.95, 0.65)
-    costo_energia = st.number_input("Costo energia (€/kWh)", value=0.30)
-    
-    # Calcolo elasticità: se prezzo > 0.70, la cattura cala
-    elasticita = max(0.1, 1.0 - (prezzo_vendita - 0.55) * 1.5)
-    cattura_reale = quota_cattura * elasticita
+# Calcolo Volumi e Ricavi
+energia_kwh = bev_palermo * 3000 * 0.30 * quota_mercato
+ricavi = energia_kwh * prezzo_kwh
+margine_lordo = energia_kwh * (prezzo_kwh - costo_kwh)
 
-# ============================================================
-# 3. LOGICA DI CALCOLO (ORIGINARIA E POTENZIATA)
-# ============================================================
-years = np.arange(2025, 2031)
-parco_stimato = [int(bev_2024 * (1 + cagr_hist)**(i-2024)) for i in years]
+# Dimensionamento
+cap_annua_colonnina = 30 * 8760 * 0.97 * utilizzazione_target
+n_colonnine = np.ceil(energia_kwh / cap_annua_colonnina).astype(int)
+opex = n_colonnine * 2000
 
-# FUNNEL DECISIONALE: Parco -> Domanda Strada -> Cattura Reale
-auto_intercettate = [int(p * quota_no_garage * cattura_reale) for p in parco_stimato]
-kwh_annui_auto = 2500 # Parametro standard
-energia_totale = np.array(auto_intercettate) * kwh_annui_auto
+# Cash Flow
+ebitda = margine_lordo - opex
+capex_flow = np.zeros(len(years))
+prev_n = 0
+for i, n in enumerate(n_colonnine):
+    capex_flow[i] = max(0, n - prev_n) * capex_unit
+    prev_n = n
 
-# RISPOSTA: Quante colonnine servono? 
-# Una 60kW DC eroga max ~130MWh/anno al 25% di saturazione
-capacita_max_unita = 60 * 8760 * 0.25 
-n_colonnine = np.ceil(energia_totale / capacita_max_unita).astype(int)
+cf_netto = ebitda - capex_flow
+cf_cum = np.cumsum(cf_netto)
 
-# ============================================================
-# 4. EXECUTIVE SUMMARY (RISPOSTE DIRETTE)
-# ============================================================
-st.title(f"📊 Analisi Decisionale Ricarica Elettrica: {provincia}")
+# --- DASHBOARD KPI ---
+st.subheader("🏁 Executive Summary")
+k1, k2, k3, k4 = st.columns(4)
+van = npf.npv(wacc, cf_netto)
+tir = npf.irr(cf_netto)
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Auto Attese (2030)", f"{parco_stimato[-1]:,}", f"+{cagr_hist:.1%} CAGR")
-col2.metric("Tua Quota (Auto)", f"{auto_intercettate[-1]}", f"{cattura_reale:.1%} netta")
-col3.metric("Energia Richiesta", f"{energia_totale[-1]/1000:.0f} MWh")
-col4.metric("Colonnine Necessarie", f"{n_colonnine[-1]} unità")
+k1.metric("VAN (Net Present Value)", f"€ {van:,.0f}", help="Ricchezza netta creata dal progetto al netto del costo del denaro.")
+k2.metric("TIR (IRR)", f"{tir*100:.1f}%" if not np.isnan(tir) else "N/D", help="Rendimento annuo del capitale investito.")
+k3.metric("Ricariche/Giorno (Media)", f"{((energia_kwh/35)/365).mean():.1f}")
+k4.metric("Payback Period", years[np.where(cf_cum >= 0)[0][0]] if any(cf_cum >= 0) else "Oltre 2030")
 
+# --- ANALISI GRAFICA ---
 st.divider()
+col_g1, col_g2 = st.columns(2)
 
-# ============================================================
-# 5. GRAFICI DECISIONALI (NUOVA SEZIONE)
-# ============================================================
-st.subheader("📉 Strumenti per la Decisione")
-g1, g2 = st.columns(2)
-
-with g1:
-    st.write("**A. Analisi del Funnel (Market Share)**")
-    # Grafico che spiega quante auto intercettiamo rispetto al totale
-    fig, ax = plt.subplots()
-    labels = ['Parco Totale', 'Domanda Strada', 'Tuo Target']
-    vals = [parco_stimato[-1], parco_stimato[-1]*quota_no_garage, auto_intercettate[-1]]
-    ax.bar(labels, vals, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
-    st.pyplot(fig)
-    st.caption("Questo grafico chiarisce quante auto 'esistono' e quante 'entrano' effettivamente nella tua stazione.")
-
-with g2:
-    st.write("**B. Stress Test Prezzo (Elasticità)**")
-    # Mostra come cambiano i ricavi variando il prezzo
-    range_p = np.linspace(0.40, 1.0, 20)
-    ricavi_sim = [p * (kwh_annui_auto * (parco_stimato[-1] * quota_no_garage * (quota_cattura * max(0.1, 1.0 - (p - 0.55)*1.5)))) for p in range_p]
+with col_g1:
+    st.write("**Grafico 1: Analisi del Punto di Pareggio (Break-even)**")
+    # Quante auto al giorno servono per coprire OPEX + Ammortamento (5 anni)?
+    auto_range = np.linspace(1, 15, 20)
+    margine_per_auto = 35 * (prezzo_kwh - costo_kwh)
+    break_even_fissi = (2000 + (capex_unit/5)) / 365
+    profitto_giornaliero = (auto_range * margine_per_auto) - break_even_fissi
     
+    fig1, ax1 = plt.subplots()
+    ax1.plot(auto_range, profitto_giornaliero, color='green', linewidth=2)
+    ax1.axhline(0, color='red', linestyle='--')
+    ax1.set_xlabel("Ricariche (Auto) al giorno per singola colonnina")
+    ax1.set_ylabel("Utile giornaliero (€)")
+    st.pyplot(fig1)
+    st.caption("Il punto di incrocio indica il traffico minimo necessario per non essere in perdita.")
+
+with col_g2:
+    st.write("**Grafico 2: Cash Flow Cumulato (Rientro Investimento)**")
     fig2, ax2 = plt.subplots()
-    ax2.plot(range_p, ricavi_sim, color='green', lw=3)
-    ax2.axvline(prezzo_vendita, color='red', ls='--', label='Tuo Prezzo')
-    ax2.set_xlabel("Prezzo €/kWh")
-    ax2.set_ylabel("Ricavi Potenziali €")
+    ax2.bar(years, cf_netto, color='skyblue', alpha=0.4, label="Cash Flow Netto")
+    ax2.plot(years, cf_cum, marker='o', color='navy', linewidth=3, label="Cumulato")
+    ax2.axhline(0, color='black', linewidth=1)
     ax2.legend()
     st.pyplot(fig2)
-    st.caption("Il punto di massimo della curva indica il prezzo ideale per non 'scacciare' i clienti.")
 
-# ============================================================
-# 6. MODULO COMPETITOR (ORIGINARIO)
-# ============================================================
 st.divider()
-st.subheader("🔍 Localizzazione e Competitor (OSM)")
-lat = st.number_input("Latitudine", value=38.1157, format="%.6f")
-lon = st.number_input("Longitudine", value=13.3615, format="%.6f")
+col_g3, col_g4 = st.columns(2)
 
-def fetch_osm(lat, lon):
-    try:
-        query = f"""[out:json];node["amenity"="charging_station"](around:5000,{lat},{lon});out;"""
-        res = requests.post("https://overpass-api.de/api/interpreter", data=query).json()
-        return len(res['elements'])
-    except: return 0
+with col_g3:
+    st.write("**Grafico 3: Scalabilità Asset (Domanda vs Offerta)**")
+    fig3, ax3 = plt.subplots()
+    ax3.bar(years, energia_kwh/1000, color='gray', alpha=0.5, label="Energia Venduta (MWh)")
+    ax3_tw = ax3.twinx()
+    ax3_tw.step(years, n_colonnine, where='post', color='red', linewidth=2, label="N. Colonnine")
+    ax3.set_title("Evoluzione Dimensionamento")
+    st.pyplot(fig3)
 
-comp_count = fetch_osm(lat, lon)
-st.warning(f"Trovate {comp_count} stazioni nel raggio di 5km. Se questo numero è alto, considera di ridurre la 'Quota Cattura' nella sidebar.")
+with col_g4:
+    st.write("**Grafico 4: Struttura Costi vs Ricavi (5 anni)**")
+    fig4, ax4 = plt.subplots()
+    labels = ['Ricavi', 'Costi Energia', 'CAPEX', 'EBITDA']
+    values = [ricavi.sum(), (energia_kwh * costo_kwh).sum(), capex_flow.sum(), ebitda.sum()]
+    ax4.bar(labels, values, color=['#27ae60', '#e67e22', '#e74c3c', '#2980b9'])
+    st.pyplot(fig4)
 
-# ============================================================
-# 7. TABELLA BP ORIGINARIA
-# ============================================================
-st.subheader("📋 Piano Finanziario 2025-2030")
-df_bp = pd.DataFrame({
-    "Anno": years,
-    "Parco Circolante": parco_stimato,
-    "Auto Clienti": auto_intercettate,
-    "MWh Erogati": (energia_totale / 1000).astype(int),
-    "Colonnine": n_colonnine,
-    "EBITDA (€)": (energia_totale * (prezzo_vendita - costo_energia)).astype(int)
-}).set_index("Anno")
-st.table(df_bp)
+# --- GLOSSARIO E TABELLA ---
+st.divider()
+st.subheader("📖 Intelligence Report: Guida alle Variabili")
+col_msg, col_tab = st.columns([1, 1])
+
+with col_msg:
+    st.info("""
+    **Legenda per il Management:**
+    - **Utilizzo Target**: La tua soglia di efficienza operativa. Se lo imposti basso, compri colonnine prima (più servizio, meno rendimento).
+    - **Quota Cattura**: Il tuo potere competitivo. Se scende, significa che i clienti preferiscono altre stazioni vicine.
+    - **WACC**: Rappresenta il 'costo opportunità'. Se il TIR è inferiore al WACC, conviene investire in altro.
+    - **Stress Test BEV**: Simula un rallentamento delle vendite auto a Palermo.
+    """)
+
+with col_tab:
+    st.write("**Dettagli Analitici**")
+    st.table(pd.DataFrame({
+        "Ricariche/Giorno": ((energia_kwh/35)/365).round(1),
+        "EBITDA (€)": ebitda.astype(int),
+        "Cash Flow Cum. (€)": cf_cum.astype(int)
+    }, index=years))
