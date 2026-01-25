@@ -941,7 +941,7 @@ Applica questo moltiplicatore **prima** del calcolo energia/funnel:
 # SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
 # ============================================================
 st.divider()
-st.subheader("📊 Sezione 7) 
+st.subheader("📊 Sezione 7") 
 # CFO NOTE:
 # Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
 # - Domanda energetica (kWh) calcolata dal funnel
