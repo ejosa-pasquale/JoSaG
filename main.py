@@ -41,6 +41,7 @@ BEV_RAW = """Anno\tProvincia\tElettrico
 2022\tPALERMO\t1066
 2023\tPALERMO\t1530
 2024\tPALERMO\t2144
+2025\tPALERMO\t2500
 2015\tRAGUSA\t16
 2021\tRAGUSA\t337
 2022\tRAGUSA\t586
@@ -144,6 +145,18 @@ with st.sidebar.expander("🔧 Scelte Tecniche", expanded=True):
     tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"], index=0)
     allocazione = st.radio("Strategia Location", ["Monosito (Tutto in A)", "Multisito (Espansione in B)"], index=0)
     ore_max_giorno = st.slider("Disponibilità Operativa (ore/giorno)", 4, 24, 10)
+
+# ===============================
+# CFO-READY NOTE (CAPACITY LOGIC)
+# -------------------------------
+# La capacità annua per colonnina è resa ESPPLICITA per audit CFO.
+# Logica adottata (unica in tutto il modello):
+# capacità_annua (kWh/anno) = potenza_kW × ore_max_giorno × 365
+# Questa è una scelta OPERATIVA (stazione di servizio) e NON usa uptime×utilizzo.
+# ===============================
+ore_disp_asset = ore_max_giorno * 365
+capacita_unit_kwh_anno = potenza_kw * ore_disp_asset
+# ===============================
     kwh_per_sessione = st.number_input("kWh medi richiesti per ricarica", value=35, min_value=5)
     kwh_annui_per_auto = st.number_input("Consumo annuo medio per BEV (kWh/auto/anno)", value=3000, min_value=500, help="Proxy per convertire il parco BEV in domanda energetica. Se hai dato locale (km/anno × kWh/km), sostituisci qui.")
     uptime = st.slider("Uptime tecnico (%)", 85, 100, 97) / 100
@@ -940,7 +953,14 @@ Applica questo moltiplicatore **prima** del calcolo energia/funnel:
 # SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
 # ============================================================
 st.divider()
-st.subheader("📊 Sezione 7 — Decision Making: Conviene installare qui?")
+st.subheader("📊 Sezione 7
+# CFO NOTE:
+# Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
+# - Domanda energetica (kWh) calcolata dal funnel
+# - Capacità annua per colonnina (capacita_unit_kwh_anno)
+# - Numero di colonnine richieste n_totale
+# CAPEX anno = (n_totale_anno − n_totale_anno_precedente) × capex_unit
+ — Decision Making: Conviene installare qui?")
 
 # --- Assunzioni standard di settore
 MODULE_KW = 30
