@@ -948,7 +948,7 @@ st.subheader("📊 Sezione 7")
 # - Capacità annua per colonnina (capacita_unit_kwh_anno)
 # - Numero di colonnine richieste n_totale
 # CAPEX anno = (n_totale_anno − n_totale_anno_precedente) × capex_unit
- — Decision Making: Conviene installare qui?")
+ — Decision Making: ("Conviene installare qui?")
 
 # --- Assunzioni standard di settore
 MODULE_KW = 30
