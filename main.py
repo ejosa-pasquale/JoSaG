@@ -145,18 +145,6 @@ with st.sidebar.expander("🔧 Scelte Tecniche", expanded=True):
     tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"])
     allocazione = st.radio("Strategia Location", ["Monosito (Tutto in A)", "Multisito (Espansione in B)"])
     ore_max_giorno = st.slider("Disponibilità Operativa (ore/giorno)", 4, 24, 10)
-
-# ===============================
-# CFO-READY NOTE (CAPACITY LOGIC)
-# -------------------------------
-# La capacità annua per colonnina è resa ESPPLICITA per audit CFO.
-# Logica adottata (unica in tutto il modello):
-# capacità_annua (kWh/anno) = potenza_kW × ore_max_giorno × 365
-# Questa è una scelta OPERATIVA (stazione di servizio) e NON usa uptime×utilizzo.
-# ===============================
-ore_disp_asset = ore_max_giorno * 365
-capacita_unit_kwh_anno = potenza_kw * ore_disp_asset
-# ===============================
     kwh_per_sessione = st.number_input("kWh medi richiesti per ricarica", min_value=5, value=35)
     kwh_annui_per_auto = st.number_input("Consumo annuo medio per BEV (kWh/auto/anno)", value=3000, min_value=500, help="Proxy per convertire il parco BEV in domanda energetica. Se hai dato locale (km/anno × kWh/km), sostituisci qui.")
     uptime = st.slider("Uptime tecnico (%)", 85, 100, 97) / 100
