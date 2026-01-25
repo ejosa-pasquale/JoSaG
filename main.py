@@ -142,8 +142,8 @@ with st.sidebar.expander("🎯 Strategia di Cattura", expanded=True):
 # ============================================================
 st.sidebar.header("⚙️ Asset, Operatività e Finanza")
 with st.sidebar.expander("🔧 Scelte Tecniche", expanded=True):
-    tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"], index=0)
-    allocazione = st.radio("Strategia Location", ["Monosito (Tutto in A)", "Multisito (Espansione in B)"], index=0)
+    tecnologia = st.selectbox("Tecnologia Asset", ["DC 30 kW", "DC 60 kW"])
+    allocazione = st.radio("Strategia Location", ["Monosito (Tutto in A)", "Multisito (Espansione in B)"])
     ore_max_giorno = st.slider("Disponibilità Operativa (ore/giorno)", 4, 24, 10)
 
 # ===============================
@@ -157,7 +157,7 @@ with st.sidebar.expander("🔧 Scelte Tecniche", expanded=True):
 ore_disp_asset = ore_max_giorno * 365
 capacita_unit_kwh_anno = potenza_kw * ore_disp_asset
 # ===============================
-    kwh_per_sessione = st.number_input("kWh medi richiesti per ricarica", value=35, min_value=5)
+    kwh_per_sessione = st.number_input("kWh medi richiesti per ricarica", min_value=5, value=35)
     kwh_annui_per_auto = st.number_input("Consumo annuo medio per BEV (kWh/auto/anno)", value=3000, min_value=500, help="Proxy per convertire il parco BEV in domanda energetica. Se hai dato locale (km/anno × kWh/km), sostituisci qui.")
     uptime = st.slider("Uptime tecnico (%)", 85, 100, 97) / 100
     # Importantissimo: il PDF usa utilizzo medio annuo (30%) per dimensionare
