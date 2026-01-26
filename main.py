@@ -372,7 +372,7 @@ SCENARIOS = {
 # ============================================================
 # SEZIONE DATI SICILIA (chiara, per contestualizzare Palermo)
 # ============================================================
-st.subheader("🗺️ Dati BEV Sicilia (2015–2025)")
+st.subheader("🗺️ Dati BEV Sicilia (2015–2024) — trasparenza territorio")
 st.caption("Questi dati sono il fondamento territoriale del tool: puoi selezionare una provincia e vedere la crescita storica.")
 
 col_d1, col_d2 = st.columns([1, 1])
@@ -636,74 +636,6 @@ with c4:
 # 5) Capacità 1 unità vs domanda città + target cattura (KWH-based)
 # ============================================================
 st.divider()
-
-
-# ============================================================
-# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
-# ============================================================
-st.divider()
-st.subheader("📊 Sezione 7") 
-# CFO NOTE:
-# Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
-# - Domanda energetica (kWh) calcolata dal funnel
-# - Capacità annua per colonnina (capacita_unit_kwh_anno)
-# - Numero di colonnine richieste n_totale
-# CAPEX anno = (n_totale_anno − n_totale_anno_precedente) × capex_unit
-# Decision Making: ("Conviene installare qui?")
-
-# --- Assunzioni standard di settore
-MODULE_KW = 30
-MODULE_COST = 20_000
-UPTIME = 0.97
-EFFICIENCY = 0.95
-ANTI_QUEUE_SAT = 0.80
-
-avg_kwh_session = st.number_input("kWh medi per sessione", value=28.0)
-price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
-energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
-opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
-
-# --- Domanda stimata (ENERGIA target giornaliera)
-public_share_local = st.slider("Quota ricarica pubblica locale (%)", 10, 80, int(public_share*100) if 'public_share' in globals() else 30) / 100
-capture_rate = st.slider("Quota cattura del bacino pubblico (%)", 0.5, 20.0, 3.0) / 100
-
-kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_rate) / 365
-sessions_target_day = kwh_target_day / max(avg_kwh_session, 1e-9)
-
-
-# --- Capacità per modulo
-hours_day = 24 * UPTIME
-kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
-sessions_day_per_module = kwh_day_per_module / avg_kwh_session
-
-modules_needed = int(np.ceil(kwh_target_day / max(kwh_day_per_module, 1e-9)))
-modules_needed = max(1, modules_needed)
-
-capex = modules_needed * MODULE_COST
-
-# --- Saturazione asset (anti-coda)
-asset_saturation = kwh_target_day / (kwh_day_per_module * modules_needed)
-
-# --- Economics (energia)
-margin_kwh_simple = price_kwh - energy_cost
-kwh_year = kwh_target_day * 365
-ebitda = kwh_year * margin_kwh_simple - opex_annual
-cash_flow = ebitda - capex
-
-# --- Output chiave
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Target (kWh/giorno)", f"{kwh_target_day:,.0f}".replace(",", "."))
-c2.metric("Moduli 30 kW necessari", modules_needed)
-c3.metric("CAPEX Totale", eur(capex))
-c4.metric("Saturazione Asset", pct(asset_saturation))
-c5.metric("EBITDA Annuo", eur(ebitda))
-
-decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
-st.markdown(f"### Decisione: **{decision}**")
-
-# ============================================================
-
-
 st.subheader("5) Domanda in crescita e target cattura: **1 unità basta?** (kWh)")
 
 st.caption(
@@ -1054,6 +986,70 @@ Applica questo moltiplicatore **prima** del calcolo energia/funnel:
             )
 
 
+# ============================================================
+# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
+# ============================================================
+st.divider()
+st.subheader("📊 Sezione 7") 
+# CFO NOTE:
+# Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
+# - Domanda energetica (kWh) calcolata dal funnel
+# - Capacità annua per colonnina (capacita_unit_kwh_anno)
+# - Numero di colonnine richieste n_totale
+# CAPEX anno = (n_totale_anno − n_totale_anno_precedente) × capex_unit
+# Decision Making: ("Conviene installare qui?")
+
+# --- Assunzioni standard di settore
+MODULE_KW = 30
+MODULE_COST = 20_000
+UPTIME = 0.97
+EFFICIENCY = 0.95
+ANTI_QUEUE_SAT = 0.80
+
+avg_kwh_session = st.number_input("kWh medi per sessione", value=28.0)
+price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
+energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
+opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
+
+# --- Domanda stimata (ENERGIA target giornaliera)
+public_share_local = st.slider("Quota ricarica pubblica locale (%)", 10, 80, int(public_share*100) if 'public_share' in globals() else 30) / 100
+capture_rate = st.slider("Quota cattura del bacino pubblico (%)", 0.5, 20.0, 3.0) / 100
+
+kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_rate) / 365
+sessions_target_day = kwh_target_day / max(avg_kwh_session, 1e-9)
+
+
+# --- Capacità per modulo
+hours_day = 24 * UPTIME
+kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
+sessions_day_per_module = kwh_day_per_module / avg_kwh_session
+
+modules_needed = int(np.ceil(kwh_target_day / max(kwh_day_per_module, 1e-9)))
+modules_needed = max(1, modules_needed)
+
+capex = modules_needed * MODULE_COST
+
+# --- Saturazione asset (anti-coda)
+asset_saturation = kwh_target_day / (kwh_day_per_module * modules_needed)
+
+# --- Economics (energia)
+margin_kwh_simple = price_kwh - energy_cost
+kwh_year = kwh_target_day * 365
+ebitda = kwh_year * margin_kwh_simple - opex_annual
+cash_flow = ebitda - capex
+
+# --- Output chiave
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Target (kWh/giorno)", f"{kwh_target_day:,.0f}".replace(",", "."))
+c2.metric("Moduli 30 kW necessari", modules_needed)
+c3.metric("CAPEX Totale", eur(capex))
+c4.metric("Saturazione Asset", pct(asset_saturation))
+c5.metric("EBITDA Annuo", eur(ebitda))
+
+decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
+st.markdown(f"### Decisione: **{decision}**")
+
+# ============================================================
 # SEZIONE 8 — Executive Investment Summary
 # ============================================================
 st.subheader("📈 Executive Investment Summary")
