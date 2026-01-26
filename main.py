@@ -197,7 +197,7 @@ else:
     bev_citta = np.linspace( bev_start, bev_base_2030,len(years))
 
 # Stress test adozione BEV
-bev_citta = bev_citta * stress_bev
+    bev_citta = bev_citta * stress_bev
     quota_stazione = np.linspace(0.02, target_cattura_2030, len(years)) * stress_cattura
 
 # Funnel (ENERGIA) — focus kWh (bacino pubblico → target stazione)
