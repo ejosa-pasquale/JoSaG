@@ -1318,12 +1318,12 @@ try:
     _opex_fixed = float(globals().get("opex_fixed_annual", 0.0))
     _opex_per_unit = float(globals().get("opex_per_unit", 0.0))
     _scale_opex = bool(globals().get("scale_opex", False))
-    _units_for_opex = _to_float(globals().get("modules_needed", globals().get(\"n_totale\", 0.0)), 0.0)
+    _units_for_opex = _to_float(globals().get("modules_needed", globals().get("n_totale", 0.0)), 0.0)
     opex_annual = _opex_fixed + (_units_for_opex * _opex_per_unit if _scale_opex else 0.0)
 except Exception:
     opex_annual = float(globals().get("opex_fixed_annual", 0.0))
 
-capex_2024 = _to_float(globals().get(\"modules_needed\", globals().get("n_totale", 0.0)), 0.0) * _to_float(globals().get(\"capex_unit\", 0.0), 0.0)
+capex_2024 = _to_float(globals().get("modules_needed", globals().get("n_totale", 0.0)), 0.0) * _to_float(globals().get("capex_unit", 0.0), 0.0)
 
 # Robust fallbacks for executive table (avoid NameError if upstream variables change)
 modules_needed_exec = _to_int(globals().get("modules_needed", globals().get("n_totale", 0)), 0)
