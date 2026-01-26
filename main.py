@@ -1012,125 +1012,129 @@ def haversine_km(lat1, lon1, lat2, lon2):
 def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
     """
     Cerca stazioni di ricarica (amenity=charging_station) entro radius_km.
+    Robusto contro 504/timeout: fallback su più endpoint + retry/backoff.
     Ritorna (ok: bool, df: DataFrame, err: str|None)
     """
-    radius_m = int(radius_km * 1000)
+    import time
 
-    # Query Overpass: nodi + ways + relations
-    # NOTA: out center serve per ways/relations
-    query = f"""
-    [out:json][timeout:25];
-    (
-      node["amenity"="charging_station"](around:{radius_m},{lat},{lon});
-      way["amenity"="charging_station"](around:{radius_m},{lat},{lon});
-      relation["amenity"="charging_station"](around:{radius_m},{lat},{lon});
-    );
-    out center tags;
-    """
+    # Endpoint pubblici (fallback). L'ordine conta: prova prima i più "capienti".
+    overpass_endpoints = [
+        "https://lz4.overpass-api.de/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
+    ]
 
-    url = "https://overpass-api.de/api/interpreter"
     headers = {
-        # User-Agent "gentile" (riduce chance di blocco)
+        # User-Agent "gentile" (riduce chance di blocco e facilita contatto in caso di problemi)
         "User-Agent": "palermo-charging-suite/1.0 (contact: you@example.com)"
     }
 
-    try:
-        r = requests.post(url, data=query.encode("utf-8"), headers=headers, timeout=35)
-    except requests.exceptions.RequestException as e:
-        return False, pd.DataFrame(), f"Errore rete/timeout Overpass: {e}"
+    def _build_query(_radius_m: int) -> str:
+        # Query Overpass: nodi + ways + relations
+        # NOTA: out center serve per ways/relations
+        return f"""
+        [out:json][timeout:50];
+        (
+          node[\"amenity\"=\"charging_station\"](around:{_radius_m},{lat},{lon});
+          way[\"amenity\"=\"charging_station\"](around:{_radius_m},{lat},{lon});
+          relation[\"amenity\"=\"charging_station\"](around:{_radius_m},{lat},{lon});
+        );
+        out center tags;
+        """
 
-    if r.status_code != 200:
-        txt = (r.text or "").strip()
-        if len(txt) > 800:
-            txt = txt[:800] + "…"
-        return False, pd.DataFrame(), f"HTTP {r.status_code} da Overpass: {txt}"
+    def _parse_elements(data: dict) -> pd.DataFrame:
+        elements = data.get("elements", [])
+        rows = []
+        for el in elements:
+            tags = el.get("tags", {}) or {}
 
-    try:
-        data = r.json()
-    except ValueError:
-        return False, pd.DataFrame(), "Risposta Overpass non-JSON (endpoint instabile)."
+            # coordinate: node => lat/lon; ways/relations => center
+            if el.get("type") == "node":
+                lat2 = el.get("lat")
+                lon2 = el.get("lon")
+            else:
+                center = el.get("center", {}) or {}
+                lat2 = center.get("lat")
+                lon2 = center.get("lon")
 
-    elements = data.get("elements", [])
-    rows = []
-    for el in elements:
-        tags = el.get("tags", {}) or {}
+            if lat2 is None or lon2 is None:
+                continue
 
-        # coordinate: node => lat/lon; ways/relations => center
-        if el.get("type") == "node":
-            lat2 = el.get("lat")
-            lon2 = el.get("lon")
-        else:
-            center = el.get("center", {}) or {}
-            lat2 = center.get("lat")
-            lon2 = center.get("lon")
+            dist_km = haversine_km(lat, lon, lat2, lon2)
+            rows.append({
+                "type": el.get("type"),
+                "id": el.get("id"),
+                "name": tags.get("name"),
+                "operator": tags.get("operator"),
+                "network": tags.get("network"),
+                "socket:type2": tags.get("socket:type2"),
+                "socket:chademo": tags.get("socket:chademo"),
+                "socket:ccs": tags.get("socket:ccs"),
+                "capacity": tags.get("capacity"),
+                "lat": lat2,
+                "lon": lon2,
+                "dist_km": float(dist_km),
+            })
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows).sort_values("dist_km").reset_index(drop=True)
+        return df
 
-        if lat2 is None or lon2 is None:
-            continue
+    # Strategia:
+    # 1) prova radius richiesto
+    # 2) se fallisce per 504/timeout, riprova con radius ridotto (x0.6) e fallback endpoint
+    radius_m_main = max(200, int(radius_km * 1000))
+    radius_m_fallback = max(200, int(radius_m_main * 0.6))
 
-        dist = float(haversine_km(lat, lon, lat2, lon2))
+    attempts_plan = [
+        ("main", radius_m_main, 2),        # 2 retry per endpoint
+        ("fallback", radius_m_fallback, 1) # 1 retry per endpoint (query più leggera)
+    ]
 
-        # Metadati utili quando disponibili
-        name = tags.get("name", "charging_station")
-        operator = tags.get("operator", "")
-        capacity = tags.get("capacity", "")
-        access = tags.get("access", "")
-        # a volte compaiono socket tags: socket:type2, socket:chademo, socket:ccs...
-        sockets = [k for k in tags.keys() if k.startswith("socket:")]
+    last_err = None
+    for label, radius_m, retries_per_endpoint in attempts_plan:
+        query = _build_query(radius_m)
 
-        rows.append({
-            "Nome": name,
-            "Operatore": operator,
-            "Capacity_tag": capacity,
-            "Access": access,
-            "Socket_tags_presenti": ", ".join(sockets[:6]) if sockets else "",
-            "Distanza_km": dist,
-            "Lat": float(lat2),
-            "Lon": float(lon2),
-            "OSM_type": el.get("type"),
-            "OSM_id": el.get("id"),
-        })
+        for url in overpass_endpoints:
+            for attempt in range(retries_per_endpoint + 1):
+                try:
+                    # POST consigliato per Overpass; timeout client > timeout query
+                    r = requests.post(url, data=query.encode("utf-8"), headers=headers, timeout=75)
+                except requests.exceptions.RequestException as e:
+                    last_err = f"Errore rete/timeout Overpass ({label}) su {url}: {e}"
+                else:
+                    if r.status_code == 200:
+                        try:
+                            data = r.json()
+                        except ValueError:
+                            last_err = f"Risposta Overpass non-JSON da {url} (endpoint instabile)."
+                        else:
+                            df = _parse_elements(data)
+                            return True, df, None
+                    else:
+                        # 504 spesso ritorna HTML/XML; tronchiamo per UI
+                        txt = (r.text or "").strip()
+                        if len(txt) > 800:
+                            txt = txt[:800] + "…"
+                        last_err = f"HTTP {r.status_code} da Overpass ({label}) su {url}: {txt}"
 
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("Distanza_km")
-    return True, df, None
+                # backoff solo se dobbiamo ritentare
+                if attempt < retries_per_endpoint:
+                    time.sleep(1.0 * (2 ** attempt))
 
-def competition_factor_osm(df_poi):
-    """
-    Moltiplicatore 'soft' (0.60–1.00) basato su:
-    - n. stazioni nel raggio
-    - distanza del competitor più vicino
-    (OSM spesso non ha potenza: qui non usiamo kW)
-    """
-    if df_poi is None or df_poi.empty:
-        return 1.00, {"n_sites": 0, "nearest_km": None}
+    return False, pd.DataFrame(), (last_err or "Errore Overpass sconosciuto.")
 
-    n_sites = int(len(df_poi))
-    nearest_km = float(df_poi["Distanza_km"].min())
-
-    # penalità “morbida” (tarabile)
-    pen = 0.00
-    pen += min(0.30, 0.02 * n_sites)                 # fino a -30% per densità
-    pen += min(0.15, 0.10 * max(0, (2.0 - nearest_km)))  # vicino <2 km fino a -15%
-
-    factor = max(0.60, 1.00 - pen)
-    meta = {"n_sites": n_sites, "nearest_km": nearest_km}
-    return factor, meta
-
-# -----------------------------
-# UI
-# -----------------------------
-st.divider()
-st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (OSM/Overpass, 5 km periurbano)")
+st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (OSM/Overpass)")
 
 with st.expander("Impostazioni prossimità", expanded=True):
     site_lat = st.number_input("Latitudine sito", value=38.1157, format="%.6f")
     site_lon = st.number_input("Longitudine sito", value=13.3615, format="%.6f")
+    radius_km = st.slider("Raggio analisi (km)", min_value=1, max_value=10, value=5, step=1)
     apply_to_capture = st.checkbox("Usa fattore competizione (OSM) per correggere quota cattura", value=True)
-    run_prox = st.button("Esegui analisi prossimità (5 km)")
+    run_prox = st.button(f"Esegui analisi prossimità ({radius_km} km)")
 
 if run_prox:
-    ok, df_poi, err = fetch_osm_chargers_overpass(site_lat, site_lon, radius_km=5)
+    ok, df_poi, err = fetch_osm_chargers_overpass(site_lat, site_lon, radius_km=radius_km)
 
     if not ok:
         st.error("Impossibile interrogare Overpass (OSM).")
@@ -1138,14 +1142,14 @@ if run_prox:
         st.info("Suggerimento: Overpass può essere lento o rate-limited. Riprova tra 1-2 minuti.")
     else:
         if df_poi.empty:
-            st.warning("Nessuna charging_station OSM trovata entro 5 km (oppure dati OSM incompleti).")
+            st.warning(f"Nessuna charging_station OSM trovata entro {radius_km} km (oppure dati OSM incompleti).")
             st.session_state["competition_factor"] = 1.0
             st.session_state["competitors_5km"] = df_poi
         else:
             factor, meta = competition_factor_osm(df_poi)
 
             c1, c2, c3 = st.columns(3)
-            c1.metric("Stazioni nel raggio (5 km)", f"{meta['n_sites']}")
+            c1.metric(f"Stazioni nel raggio ({radius_km} km)", f"{meta['n_sites']}")
             c2.metric("Competitor più vicino", f"{meta['nearest_km']:.2f} km")
             c3.metric("Fattore competizione (OSM)", f"{factor:.2f}x")
 
@@ -1154,7 +1158,7 @@ if run_prox:
             map_comp = df_poi.rename(columns={"Lat": "lat", "Lon": "lon"})[["lat", "lon"]]
             st.map(pd.concat([map_site, map_comp], ignore_index=True))
 
-            st.caption("Dettaglio punti (OSM amenity=charging_station)")
+            st.caption(f"Dettaglio punti (OSM amenity=charging_station) entro {radius_km} km")
             st.dataframe(df_poi, use_container_width=True)
 
             # Output per il modello
