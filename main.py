@@ -175,6 +175,11 @@ with st.sidebar.expander("🏦 Modalità CFO (tasse, WC, scenari, tornado)", exp
     scenario_view = st.selectbox("Scenario da visualizzare", ["Base", "Bear", "Bull"], index=0)
 
 # ============================================================
+# DATI BEV start (2024) 
+# ============================================================
+bev_2024_per_citta = { "AGRIGENTO": 521, "CALTANISSETTA": 318, "PALERMO": 1240, "CATANIA": 1420}    
+
+# ============================================================
 # LOGICA (pdf-like + manager-friendly)
 # ============================================================
 years = np.array([2026, 2027, 2028, 2029, 2030])
@@ -193,7 +198,6 @@ else:
     # ===============================
     # SCENARIO BEV CITTÀ
     # ===============================
-    bev_2024_per_citta = { "AGRIGENTO": 521, "CALTANISSETTA": 318, "PALERMO": 1240, "CATANIA": 1420}    
     bev_start = bev_2024_per_citta.get(citta, 0) 
     bev_citta = np.linspace(bev_start, bev_base_2030, len(years))
 
