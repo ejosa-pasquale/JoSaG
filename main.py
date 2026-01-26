@@ -1124,6 +1124,42 @@ def fetch_osm_chargers_overpass(lat, lon, radius_km=5):
 
     return False, pd.DataFrame(), (last_err or "Errore Overpass sconosciuto.")
 
+
+def competition_factor_osm(df_poi: pd.DataFrame):
+    '''Calcola un fattore di competizione (<= 1.0) a partire dai POI OSM.
+
+    Idea: più competitor e più vicini => quota cattura effettiva più bassa.
+
+    Ritorna (factor: float, meta: dict)
+    - factor è clampato tra 0.60 e 1.00 (non amplifica mai, solo riduce)
+    - usa la colonna dist_km prodotta da fetch_osm_chargers_overpass
+    '''
+    if df_poi is None or df_poi.empty or 'dist_km' not in df_poi.columns:
+        return 1.0, {'n_sites': 0, 'nearest_km': float('inf')}
+
+    n_sites = int(len(df_poi))
+    nearest_km = float(df_poi['dist_km'].min())
+
+    # Penalità per numerosità (log per evitare eccessi)
+    p_n = 0.12 * np.log1p(n_sites)
+
+    # Penalità per prossimità: alta se <1km, decresce rapidamente oltre ~3km
+    if nearest_km <= 0.0:
+        p_d = 0.30
+    else:
+        p_d = 0.30 * np.exp(-nearest_km / 1.5)
+
+    factor = 1.0 - float(p_n + p_d)
+    factor = float(max(0.60, min(1.00, factor)))
+
+    meta = {
+        'n_sites': n_sites,
+        'nearest_km': nearest_km,
+        'penalty_n': float(p_n),
+        'penalty_d': float(p_d),
+    }
+    return factor, meta
+
 st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (OSM/Overpass)")
 
 with st.expander("Impostazioni prossimità", expanded=True):
@@ -1140,6 +1176,8 @@ if run_prox:
         st.error("Impossibile interrogare Overpass (OSM).")
         st.code(err, language="text")
         st.info("Suggerimento: Overpass può essere lento o rate-limited. Riprova tra 1-2 minuti.")
+        st.session_state["competition_factor"] = 1.0
+        st.session_state["competitors_5km"] = pd.DataFrame()
     else:
         if df_poi.empty:
             st.warning(f"Nessuna charging_station OSM trovata entro {radius_km} km (oppure dati OSM incompleti).")
@@ -1155,14 +1193,14 @@ if run_prox:
 
             # Mappa semplice (no pydeck)
             map_site = pd.DataFrame([{"lat": site_lat, "lon": site_lon}])
-            map_comp = df_poi.rename(columns={"Lat": "lat", "Lon": "lon"})[["lat", "lon"]]
+            map_comp = df_poi[['lat', 'lon']].copy()
             st.map(pd.concat([map_site, map_comp], ignore_index=True))
 
             st.caption(f"Dettaglio punti (OSM amenity=charging_station) entro {radius_km} km")
             st.dataframe(df_poi, use_container_width=True)
 
             # Output per il modello
-            st.session_state["competition_factor"] = float(factor)
+            st.session_state["competition_factor"] = float(factor) if apply_to_capture else 1.0
             st.session_state["competitors_5km"] = df_poi
 
             if apply_to_capture:
