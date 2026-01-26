@@ -98,6 +98,52 @@ def forecast_bev_2030(df_hist, province, method="CAGR 2021–2024"):
     bev_2030 = int(round(bev_2024 * ((1 + cagr) ** 6)))  # 2024 -> 2030
     return bev_2024, max(bev_2030, bev_2024), cagr
 
+def forecast_bev_path_2024_2030(bev_2024: int, bev_2030: int, cap_exp: float = 0.18):
+    """
+    Costruisce una traiettoria BEV 2024–2030 coerente con la richiesta:
+    - 2025 e 2026: crescita lineare (incremento costante dal valore 2024)
+    - 2027–2030: crescita esponenziale "non aggressiva" (tasso annuo limitato da cap_exp, se possibile)
+
+    Ritorna un dict {anno: valore}.
+    Nota: se per raggiungere il target 2030 serve un tasso > cap_exp, la funzione aumenta
+    la quota "lineare" al 2026 (quindi alza il livello 2026) finché il tasso rientra nel cap
+    o finché la quota raggiunge un limite ragionevole.
+    """
+    bev_2024 = float(bev_2024)
+    bev_2030 = float(max(bev_2030, bev_2024))
+
+    if bev_2030 <= bev_2024 + 1e-9:
+        return {y: int(round(bev_2024)) for y in range(2024, 2031)}
+
+    delta = bev_2030 - bev_2024
+
+    # Quota del gap già "raggiunta" nel 2026 con crescita lineare 2025–2026.
+    share_2026 = 0.30
+    for _ in range(20):
+        bev_2026 = bev_2024 + delta * share_2026
+        r_req = (bev_2030 / max(bev_2026, 1e-9)) ** (1 / 4) - 1  # 2026 -> 2030 (4 anni)
+        if r_req <= cap_exp or share_2026 >= 0.90:
+            break
+        share_2026 += 0.05
+
+    share_2025 = share_2026 / 2
+    bev_2025 = bev_2024 + delta * share_2025
+    bev_2026 = bev_2024 + delta * share_2026
+
+    r = (bev_2030 / max(bev_2026, 1e-9)) ** (1 / 4) - 1
+
+    path = {2024: bev_2024, 2025: bev_2025, 2026: bev_2026}
+    v = bev_2026
+    for y in (2027, 2028, 2029, 2030):
+        v = v * (1 + r)
+        path[y] = v
+
+    # Forza il target esatto al 2030
+    path[2030] = bev_2030
+
+    return {y: int(round(path[y])) for y in range(2024, 2031)}
+
+
 # ============================================================
 # HEADER
 # ============================================================
@@ -190,8 +236,9 @@ if pdf_lock:
     bev_citta = np.array([2600, 3000, 3500, 4200, 5000], dtype=float) * stress_bev
     quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05], dtype=float) * stress_cattura
 else:
-    # traiettoria trasparente e modificabile (lineare verso target)
-    bev_citta = np.linspace(bev_base_2030 * 0.5, bev_base_2030, len(years)) * stress_bev
+    # traiettoria trasparente: base 2024 (dataset) → 2025–2026 lineare → 2027–2030 esponenziale soft
+    bev_path = forecast_bev_path_2024_2030(bev_2024, bev_base_2030)
+    bev_citta = np.array([bev_path[int(y)] for y in years], dtype=float) * stress_bev
     quota_stazione = np.linspace(0.02, target_cattura_2030, len(years)) * stress_cattura
 
 # Funnel (ENERGIA) — focus kWh (bacino pubblico → target stazione)
@@ -364,6 +411,7 @@ costo_fisso_day_unit = opex_day_unit + amm_day_unit + canone_pot_day_unit
 kwh_be_day_unit = costo_fisso_day_unit / max(margine_kwh_exec, 1e-9)  # kWh/giorno per unità
 kwh_day_tot = energia_kwh / 365.0                                     # kWh/giorno totali stazione (domanda catturata)
 kwh_day_pub = energia_pubblica_kwh / 365.0                             # kWh/giorno bacino pubblico
+kw_avg_pub = energia_pubblica_kwh / 8760.0                               # kW medi annui bacino pubblico
 
 # capacità giornaliera (anti-coda) per unità — usata solo come check operativo
 cap_kwh_day_unit = potenza_kw * ore_max_giorno * uptime * saturazione_target
@@ -387,6 +435,7 @@ conviene_2030 = (kwh_day_tot[-1] >= kwh_be_day_unit) and (margine_kwh_exec > 0)
 df_decision = pd.DataFrame({
     "Anno": years.astype(int),
     "Bacino pubblico (kWh/g)": np.round(kwh_day_pub, 0),
+    "Bacino pubblico (kW medi)": np.round(kw_avg_pub, 2),
     "Target cattura (kWh/g)": np.round(kwh_day_tot, 0),
     "BE per unità (kWh/g)": np.round(np.repeat(kwh_be_day_unit, len(years)), 0),
     "Max unità che convengono (profit)": n_profit_max,
@@ -1049,4 +1098,3 @@ bd = pd.DataFrame({
 })
 
 st.table(bd)
-
