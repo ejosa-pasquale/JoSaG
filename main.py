@@ -820,7 +820,7 @@ with st.expander("📝 Note proiezione 3 anni", expanded=False):
 # ============================================================
 
 
-st.subheader("5) Domanda in crescita e target cattura: **1 unità basta?** (kWh)")
+st.subheader("Stima Numero Colonnine: **1 unità basta?** (kWh)")
 
 with st.expander("📝 Nota (cosa confrontano i grafici 5A/5B)", expanded=False):
     st.write(
