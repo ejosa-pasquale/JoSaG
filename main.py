@@ -646,10 +646,10 @@ st.divider()
 
 
 # ============================================================
-# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
+# Wizard Decision Making & CAPEX (Moduli 30 kW)
 # ============================================================
 st.divider()
-st.subheader("📊 Sezione 7") 
+st.subheader("📊 Wizard Decision Making & CAPEX") 
 # CFO NOTE:
 # Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
 # - Domanda energetica (kWh) calcolata dal funnel
