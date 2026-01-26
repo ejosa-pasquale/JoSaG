@@ -372,7 +372,7 @@ SCENARIOS = {
 # ============================================================
 # SEZIONE DATI SICILIA (chiara, per contestualizzare Palermo)
 # ============================================================
-st.subheader("🗺️ Dati BEV Sicilia (2015–2024) — trasparenza territorio")
+st.subheader("🗺️ Dati BEV Sicilia (2015–2025)")
 st.caption("Questi dati sono il fondamento territoriale del tool: puoi selezionare una provincia e vedere la crescita storica.")
 
 col_d1, col_d2 = st.columns([1, 1])
