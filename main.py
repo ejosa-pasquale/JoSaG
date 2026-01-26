@@ -1288,6 +1288,10 @@ except Exception:
 
 capex_2024 = float(globals().get("modules_needed", 0)) * float(globals().get("capex_unit", 0.0))
 
+# Robust fallbacks for executive table (avoid NameError if upstream variables change)
+modules_needed_exec = int(globals().get("modules_needed", globals().get("n_totale", 0)))
+asset_saturation_exec = float(globals().get("asset_saturation", globals().get("saturazione_asset", 0.0)))
+
 years = list(range(2024, 2031))
 cum_cf = 0
 rows = []
@@ -1303,10 +1307,10 @@ for y in years:
         "Anno": y,
         "Target kWh/giorno": round(kwh_day_y, 0),
         "Target kWh/anno": round(kwh_year_y, 0),
-        "Moduli 30kW": modules_needed,
-        "Saturazione Asset %": asset_saturation,
+        "Moduli 30kW": modules_needed_exec,
+        "Saturazione Asset %": asset_saturation_exec,
         "EBITDA": ebitda_y,
-        "CAPEX": capex if y == 2024 else 0,
+        "CAPEX": capex_2024 if y == 2024 else 0,
         "Cash Flow Cumulato": cum_cf
     })
 
