@@ -705,7 +705,7 @@ st.divider()
 # SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
 # ============================================================
 st.divider()
-st.subheader("📊 Sezione 7") 
+st.subheader("📊 Wizard - Decision Making") 
 # CFO NOTE:
 # Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
 # - Domanda energetica (kWh) calcolata dal funnel
@@ -1160,7 +1160,7 @@ def competition_factor_osm(df_poi: pd.DataFrame):
     }
     return factor, meta
 
-st.subheader("🗺️ Sezione 6 — Analisi prossimità colonnine (OSM/Overpass)")
+st.subheader("🗺️ Analisi prossimità colonnine -  Competitor")
 
 with st.expander("Impostazioni prossimità", expanded=True):
     site_lat = st.number_input("Latitudine sito", value=38.1157, format="%.6f")
