@@ -199,8 +199,7 @@ else:
     "PALERMO": 1240,
     "CATANIA": 1420
     }
-
-    bev_start = bev_2024_per_citta[citta]  
+    bev_start = bev_2024_per_citta.get(citta, 0) 
     bev_citta = np.linspace(bev_start, bev_base_2030, len(years))
 
     # Stress test adozione BEV
