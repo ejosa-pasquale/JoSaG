@@ -1268,6 +1268,43 @@ Applica questo moltiplicatore **prima** del calcolo energia/funnel:
 # ============================================================
 st.subheader("📈 Executive Investment Summary")
 
+# --- helper: robust scalar extraction (avoid NameError/TypeError when globals contain arrays/Series)
+def _to_float(x, default=0.0):
+    try:
+        if x is None:
+            return default
+        # list/tuple -> first element
+        if isinstance(x, (list, tuple)):
+            if len(x) == 0:
+                return default
+            x = x[0]
+        # pandas Series/DataFrame-like
+        if hasattr(x, "iloc"):
+            try:
+                # Series
+                x = x.iloc[0]
+            except Exception:
+                # DataFrame
+                x = x.iloc[0, 0]
+        # numpy scalar / array of size 1
+        if hasattr(x, "shape") and hasattr(x, "size") and getattr(x, "size", 0) == 1 and hasattr(x, "item"):
+            x = x.item()
+        if hasattr(x, "item") and not isinstance(x, (float, int)):
+            try:
+                x = x.item()
+            except Exception:
+                pass
+        return float(x)
+    except Exception:
+        return default
+
+def _to_int(x, default=0):
+    try:
+        return int(round(_to_float(x, default=float(default))))
+    except Exception:
+        return default
+
+
 # Base domanda 2024 (kWh/giorno) usata come riferimento per la crescita
 capture_eff = capture_rate * float(st.session_state.get("competition_factor", 1.0))
 kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_eff) / 365
@@ -1281,16 +1318,16 @@ try:
     _opex_fixed = float(globals().get("opex_fixed_annual", 0.0))
     _opex_per_unit = float(globals().get("opex_per_unit", 0.0))
     _scale_opex = bool(globals().get("scale_opex", False))
-    _units_for_opex = float(globals().get("modules_needed", globals().get("n_totale", 0.0)))
+    _units_for_opex = _to_float(globals().get(\"modules_needed\", globals().get(\"n_totale\", 0.0)), 0.0)
     opex_annual = _opex_fixed + (_units_for_opex * _opex_per_unit if _scale_opex else 0.0)
 except Exception:
     opex_annual = float(globals().get("opex_fixed_annual", 0.0))
 
-capex_2024 = float(globals().get("modules_needed", 0)) * float(globals().get("capex_unit", 0.0))
+capex_2024 = _to_float(globals().get(\"modules_needed\", globals().get(\"n_totale\", 0.0)), 0.0) * _to_float(globals().get(\"capex_unit\", 0.0), 0.0)
 
 # Robust fallbacks for executive table (avoid NameError if upstream variables change)
-modules_needed_exec = int(globals().get("modules_needed", globals().get("n_totale", 0)))
-asset_saturation_exec = float(globals().get("asset_saturation", globals().get("saturazione_asset", 0.0)))
+modules_needed_exec = _to_int(globals().get(\"modules_needed\", globals().get(\"n_totale\", 0)), 0)
+asset_saturation_exec = _to_float(globals().get(\"asset_saturation\", globals().get(\"saturazione_asset\", 0.0)), 0.0)
 
 years = list(range(2024, 2031))
 cum_cf = 0
