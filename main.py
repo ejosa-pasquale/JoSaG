@@ -536,14 +536,15 @@ with c1:
     ax1.set_ylabel("Margine giornaliero per unità (€)")
     st.pyplot(fig1)
 
-    st.markdown(r"""
+    with st.expander("📝 Note sotto il grafico (formula + lettura)", expanded=False):
+        st.markdown(r"""
 **Formula (operativa)**
 - $kWh_{BE/day} = \frac{OPEX_{day} + Amm_{day} + CanonePot_{day}}{P_{netto} - C_{energia}}$
 - (opz.) $Sessioni_{BE/day} = \frac{kWh_{BE/day}}{kWh_{sess}}$
 """)
 
-st.markdown(
-    f"""
+        st.markdown(
+            f"""
 **Con gli input attuali**
 - Margine per kWh (netto fee): **{margine_kwh:.2f} € / kWh**
 - Costi fissi (per unità/giorno): **{costo_fisso_day:.2f} € / giorno**
@@ -555,8 +556,8 @@ st.markdown(
 
 **Azioni tipiche**
 - Aumentare margine (prezzo, costo energia, ancillary), ridurre OPEX o migliorare cattura.
-    """.replace(",", ".")
-)
+            """.replace(",", ".")
+        )
 
 
 with c2:
@@ -569,7 +570,8 @@ with c2:
     ax2.set_ylabel("€ cumulati")
     st.pyplot(fig2)
 
-    st.markdown(rf"""
+    with st.expander("📝 Note sotto il grafico (formula + interpretazione)", expanded=False):
+        st.markdown(rf"""
 **Formula (come PDF)**
 - $CF_{{netto,t}} = EBITDA_t - CAPEX_t$
 - $CF_{{cum,t}} = \sum CF_{{netto}}$
@@ -592,22 +594,26 @@ with c3:
     ax3.set_ylabel("Unità richieste")
     st.pyplot(fig3)
 
-    if metodo_capacita.startswith("PDF"):
-        cap_kwh_unit_anno = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
-        st.markdown(rf"""
-**Formula capacità (PDF)**
-- $kWh_{{unit,anno}} = kW \cdot 8760 \cdot Uptime \cdot Utilizzo$
+    with st.expander("📝 Note sotto il grafico (capacità e lettura)", expanded=False):
 
-**Con input attuali**
-- Capacità 1 unità: **{cap_kwh_unit_anno:,.0f} kWh/anno**  
-- Se la domanda (kWh) cresce, le unità richieste aumentano “a scalini”.
-        """.replace(",", "."))
-    else:
-        st.markdown(rf"""
-**Capacità session-based (più leggibile per GM)**
-- Sessioni/giorno per unità dipendono da ore/giorno, kWh/sessione, uptime e target anti-coda.
-- Se la saturazione stimata si avvicina a 100%, iniziano code e vendite perse.
-        """)
+
+        if metodo_capacita.startswith("PDF"):
+            cap_kwh_unit_anno = potenza_kw * 8760 * uptime * utilizzo_medio_annuo
+            st.markdown(rf"""
+    **Formula capacità (PDF)**
+    - $kWh_{{unit,anno}} = kW \cdot 8760 \cdot Uptime \cdot Utilizzo$
+
+    **Con input attuali**
+    - Capacità 1 unità: **{cap_kwh_unit_anno:,.0f} kWh/anno**  
+    - Se la domanda (kWh) cresce, le unità richieste aumentano “a scalini”.
+            """.replace(",", "."))
+        else:
+            st.markdown(rf"""
+    **Capacità session-based (più leggibile per GM)**
+    - Sessioni/giorno per unità dipendono da ore/giorno, kWh/sessione, uptime e target anti-coda.
+    - Se la saturazione stimata si avvicina a 100%, iniziano code e vendite perse.
+            """)
+
 
 with c4:
     st.write("**4) Struttura margini (totale periodo)**")
@@ -626,7 +632,8 @@ with c4:
     ax4.set_ylabel("€ (somma periodo)")
     st.pyplot(fig4)
 
-    st.markdown(r"""
+    with st.expander("📝 Note sotto il grafico (cosa mostra)", expanded=False):
+        st.markdown(r"""
 **Cosa mostra**
 - Quanto “mangiano” energia, OPEX e (in modalità CFO) fee e canoni.
 - Se l’EBITDA è piccolo rispetto ai costi, serve lavorare su margine o cattura.
@@ -636,11 +643,81 @@ with c4:
 # 5) Capacità 1 unità vs domanda città + target cattura (KWH-based)
 # ============================================================
 st.divider()
+
+
+# ============================================================
+# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
+# ============================================================
+st.divider()
+st.subheader("📊 Sezione 7") 
+# CFO NOTE:
+# Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
+# - Domanda energetica (kWh) calcolata dal funnel
+# - Capacità annua per colonnina (capacita_unit_kwh_anno)
+# - Numero di colonnine richieste n_totale
+# CAPEX anno = (n_totale_anno − n_totale_anno_precedente) × capex_unit
+# Decision Making: ("Conviene installare qui?")
+
+# --- Assunzioni standard di settore
+MODULE_KW = 30
+MODULE_COST = 20_000
+UPTIME = 0.97
+EFFICIENCY = 0.95
+ANTI_QUEUE_SAT = 0.80
+
+avg_kwh_session = st.number_input("kWh medi per sessione", value=28.0)
+price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
+energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
+opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
+
+# --- Domanda stimata (ENERGIA target giornaliera)
+public_share_local = st.slider("Quota ricarica pubblica locale (%)", 10, 80, int(public_share*100) if 'public_share' in globals() else 30) / 100
+capture_rate = st.slider("Quota cattura del bacino pubblico (%)", 0.5, 20.0, 3.0) / 100
+
+kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_rate) / 365
+sessions_target_day = kwh_target_day / max(avg_kwh_session, 1e-9)
+
+
+# --- Capacità per modulo
+hours_day = 24 * UPTIME
+kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
+sessions_day_per_module = kwh_day_per_module / avg_kwh_session
+
+modules_needed = int(np.ceil(kwh_target_day / max(kwh_day_per_module, 1e-9)))
+modules_needed = max(1, modules_needed)
+
+capex = modules_needed * MODULE_COST
+
+# --- Saturazione asset (anti-coda)
+asset_saturation = kwh_target_day / (kwh_day_per_module * modules_needed)
+
+# --- Economics (energia)
+margin_kwh_simple = price_kwh - energy_cost
+kwh_year = kwh_target_day * 365
+ebitda = kwh_year * margin_kwh_simple - opex_annual
+cash_flow = ebitda - capex
+
+# --- Output chiave
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Target (kWh/giorno)", f"{kwh_target_day:,.0f}".replace(",", "."))
+c2.metric("Moduli 30 kW necessari", modules_needed)
+c3.metric("CAPEX Totale", eur(capex))
+c4.metric("Saturazione Asset", pct(asset_saturation))
+c5.metric("EBITDA Annuo", eur(ebitda))
+
+decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
+st.markdown(f"### Decisione: **{decision}**")
+
+# ============================================================
+
+
 st.subheader("5) Domanda in crescita e target cattura: **1 unità basta?** (kWh)")
 
-st.caption(
-    f"Confronto **bacino pubblico (kWh/anno)**, **target cattura (kWh/anno)** e **capacità di 1 unità {tecnologia} (kWh/anno)**."
-)
+with st.expander("📝 Nota (cosa confrontano i grafici 5A/5B)", expanded=False):
+    st.write(
+        f"Confronto **bacino pubblico (kWh/anno)**, **target cattura (kWh/anno)** e **capacità di 1 unità {tecnologia} (kWh/anno)**."
+    )
+
 
 # Capacità 1 unità (kWh/anno)
 cap_unit_kwh = potenza_kw * 8760 * uptime * utilizzo_medio_annuo  # stile PDF: kW×8760×uptime×utilizzo
@@ -657,16 +734,17 @@ with col5a:
     ax.legend()
     st.pyplot(fig)
 
-    st.markdown(rf"""
-**Interpretazione (kWh)**
-- Il **bacino pubblico** è la quota di energia BEV che passa dal pubblico: $E_{{pub}} = E_{{BEV}}\cdot quota_{{pub}}$.
-- Il **target** è l’energia che ti aspetti di catturare: $E_{{target}} = E_{{pub}}\cdot quota_{{stazione}}$.
+    with st.expander("📝 Note sotto il grafico 5A", expanded=False):
+        st.markdown(rf"""
+    **Interpretazione (kWh)**
+    - Il **bacino pubblico** è la quota di energia BEV che passa dal pubblico: $E_{{pub}} = E_{{BEV}}\cdot quota_{{pub}}$.
+    - Il **target** è l’energia che ti aspetti di catturare: $E_{{target}} = E_{{pub}}\cdot quota_{{stazione}}$.
 
-**Con input attuali (2030)**
-- Bacino pubblico 2030 ≈ **{energia_pubblica_kwh[-1]:,.0f} kWh/anno**
-- Target 2030 ≈ **{energia_kwh[-1]:,.0f} kWh/anno** (≈ **{(energia_kwh[-1]/max(energia_pubblica_kwh[-1],1e-9))*100:.1f}%** del bacino)
-- (Solo reporting) “auto equivalenti” 2030 ≈ **{auto_clienti_anno[-1]:,.0f}**
-    """.replace(",", "."))
+    **Con input attuali (2030)**
+    - Bacino pubblico 2030 ≈ **{energia_pubblica_kwh[-1]:,.0f} kWh/anno**
+    - Target 2030 ≈ **{energia_kwh[-1]:,.0f} kWh/anno** (≈ **{(energia_kwh[-1]/max(energia_pubblica_kwh[-1],1e-9))*100:.1f}%** del bacino)
+    - (Solo reporting) “auto equivalenti” 2030 ≈ **{auto_clienti_anno[-1]:,.0f}**
+        """.replace(",", "."))
 
 with col5b:
     st.write("**5B) Quante unità servono per servire il target? (soglia=1)**")
@@ -678,14 +756,15 @@ with col5b:
     ax.legend()
     st.pyplot(fig)
 
-    st.markdown(rf"""
-**Capacità 1 unità (kWh/anno)**
-- $kWh_{{unit,anno}} = {potenza_kw}\cdot 8760 \cdot {uptime:.2f} \cdot {utilizzo_medio_annuo:.2f} \approx {cap_unit_kwh:,.0f}$
+    with st.expander("📝 Note sotto il grafico 5B", expanded=False):
+        st.markdown(rf"""
+    **Capacità 1 unità (kWh/anno)**
+    - $kWh_{{unit,anno}} = {potenza_kw}\cdot 8760 \cdot {uptime:.2f} \cdot {utilizzo_medio_annuo:.2f} \approx {cap_unit_kwh:,.0f}$
 
-**Come leggere**
-- Se la linea supera 1 → **1 unità non basta** per il target energetico.
-- L’anno in cui supera 1 è un ottimo **indicatore decisionale** (quando serve installare la 2ª unità).
-    """.replace(",", "."))
+    **Come leggere**
+    - Se la linea supera 1 → **1 unità non basta** per il target energetico.
+    - L’anno in cui supera 1 è un ottimo **indicatore decisionale** (quando serve installare la 2ª unità).
+        """.replace(",", "."))
 
 # Indicatore: primo anno in cui 1 unità non basta
 anno_non_basta = None
@@ -759,7 +838,8 @@ if cfo_mode:
     ax.axvline(base_npv, linewidth=1)
     st.pyplot(fig)
 
-    st.caption("Il Tornado mostra quali variabili muovono di più il VAN: ottimo per decidere su cosa fare due diligence.")
+    with st.expander("📝 Note sotto il grafico Tornado", expanded=False):
+        st.write("Il Tornado mostra quali variabili muovono di più il VAN: ottimo per decidere su cosa fare due diligence.")
 
 # ============================================================
 # REPORT TABELLARE
@@ -986,70 +1066,6 @@ Applica questo moltiplicatore **prima** del calcolo energia/funnel:
             )
 
 
-# ============================================================
-# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
-# ============================================================
-st.divider()
-st.subheader("📊 Sezione 7") 
-# CFO NOTE:
-# Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
-# - Domanda energetica (kWh) calcolata dal funnel
-# - Capacità annua per colonnina (capacita_unit_kwh_anno)
-# - Numero di colonnine richieste n_totale
-# CAPEX anno = (n_totale_anno − n_totale_anno_precedente) × capex_unit
-# Decision Making: ("Conviene installare qui?")
-
-# --- Assunzioni standard di settore
-MODULE_KW = 30
-MODULE_COST = 20_000
-UPTIME = 0.97
-EFFICIENCY = 0.95
-ANTI_QUEUE_SAT = 0.80
-
-avg_kwh_session = st.number_input("kWh medi per sessione", value=28.0)
-price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
-energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
-opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
-
-# --- Domanda stimata (ENERGIA target giornaliera)
-public_share_local = st.slider("Quota ricarica pubblica locale (%)", 10, 80, int(public_share*100) if 'public_share' in globals() else 30) / 100
-capture_rate = st.slider("Quota cattura del bacino pubblico (%)", 0.5, 20.0, 3.0) / 100
-
-kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_rate) / 365
-sessions_target_day = kwh_target_day / max(avg_kwh_session, 1e-9)
-
-
-# --- Capacità per modulo
-hours_day = 24 * UPTIME
-kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
-sessions_day_per_module = kwh_day_per_module / avg_kwh_session
-
-modules_needed = int(np.ceil(kwh_target_day / max(kwh_day_per_module, 1e-9)))
-modules_needed = max(1, modules_needed)
-
-capex = modules_needed * MODULE_COST
-
-# --- Saturazione asset (anti-coda)
-asset_saturation = kwh_target_day / (kwh_day_per_module * modules_needed)
-
-# --- Economics (energia)
-margin_kwh_simple = price_kwh - energy_cost
-kwh_year = kwh_target_day * 365
-ebitda = kwh_year * margin_kwh_simple - opex_annual
-cash_flow = ebitda - capex
-
-# --- Output chiave
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Target (kWh/giorno)", f"{kwh_target_day:,.0f}".replace(",", "."))
-c2.metric("Moduli 30 kW necessari", modules_needed)
-c3.metric("CAPEX Totale", eur(capex))
-c4.metric("Saturazione Asset", pct(asset_saturation))
-c5.metric("EBITDA Annuo", eur(ebitda))
-
-decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
-st.markdown(f"### Decisione: **{decision}**")
-
-# ============================================================
 # SEZIONE 8 — Executive Investment Summary
 # ============================================================
 st.subheader("📈 Executive Investment Summary")
