@@ -1273,6 +1273,19 @@ capture_eff = capture_rate * float(st.session_state.get("competition_factor", 1.
 kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_eff) / 365
 
 
+
+# OPEX annuo usato nell'Executive Summary (coerente con impostazioni CAPEX/OPEX)
+# - parte fissa: opex_fixed_annual (se presente)
+# - parte variabile: scale_opex * opex_per_unit per unità/modulo installato
+try:
+    _opex_fixed = float(globals().get("opex_fixed_annual", 0.0))
+    _opex_per_unit = float(globals().get("opex_per_unit", 0.0))
+    _scale_opex = bool(globals().get("scale_opex", False))
+    _units_for_opex = float(globals().get("modules_needed", globals().get("n_totale", 0.0)))
+    opex_annual = _opex_fixed + (_units_for_opex * _opex_per_unit if _scale_opex else 0.0)
+except Exception:
+    opex_annual = float(globals().get("opex_fixed_annual", 0.0))
+
 years = list(range(2024, 2031))
 cum_cf = 0
 rows = []
