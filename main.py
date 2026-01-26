@@ -193,9 +193,8 @@ else:
 # ===============================
 # SCENARIO BEV CITTÀ
 # ===============================
-bev_start = bev_2024_per_citta[citta]
-    
-bev_citta = np.linspace( bev_start, bev_base_2030,len(years))
+    bev_start = bev_2024_per_citta[citta]  
+    bev_citta = np.linspace( bev_start, bev_base_2030,len(years))
 
 # Stress test adozione BEV
     bev_citta = bev_citta * stress_bev
