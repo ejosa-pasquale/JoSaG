@@ -1286,6 +1286,8 @@ try:
 except Exception:
     opex_annual = float(globals().get("opex_fixed_annual", 0.0))
 
+capex_2024 = float(globals().get("modules_needed", 0)) * float(globals().get("capex_unit", 0.0))
+
 years = list(range(2024, 2031))
 cum_cf = 0
 rows = []
@@ -1295,7 +1297,7 @@ for y in years:
     kwh_day_y = kwh_target_day * growth_factor
     kwh_year_y = kwh_day_y * 365
     ebitda_y = kwh_year_y * margin_kwh_simple - opex_annual
-    cum_cf += ebitda_y - (capex if y == 2024 else 0)
+    cum_cf += ebitda_y - (capex_2024 if y == 2024 else 0)
 
     rows.append({
         "Anno": y,
