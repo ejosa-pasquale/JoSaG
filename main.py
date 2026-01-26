@@ -761,8 +761,7 @@ c3.metric("CAPEX Totale", eur(capex))
 c4.metric("Saturazione Asset", pct(asset_saturation))
 c5.metric("EBITDA Annuo", eur(ebitda_annuo))
 
-decision = "✅ INVESTIRE" if ebitda_annuo > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
-st.markdown(f"### Decisione: **{decision}**")
+# Decisione Wizard: basata su NPV a 3 anni (vedi sotto)
 
 # --- Proiezione investimento a 3 anni (Wizard)
 st.subheader("📅 Proiezione investimento a 3 anni (Wizard)")
@@ -786,6 +785,34 @@ kwh_year_3y = kwh_target_day_3y * 365
 ebitda_year_3y = (kwh_year_3y * margin_kwh_simple) - opex_annual
 ebitda_cum_3y = np.cumsum(ebitda_year_3y)
 
+# --- Decisione su 3 anni: NPV (Net Present Value)
+discount_rate = st.slider("Tasso di sconto per NPV (%)", 6.0, 12.0, 8.0, 0.5) / 100
+
+# Free Cash Flow anno = EBITDA anno − CAPEX incrementale (solo nuovi moduli)
+fcf_year_3y = ebitda_year_3y - capex_year_3y
+
+# NPV a 3 anni (flussi a fine anno t=1..3)
+t = np.arange(1, len(years_3y) + 1)
+npv_3y = float(np.sum(fcf_year_3y / ((1 + discount_rate) ** t)))
+
+# Payback (anni) su flussi NON scontati, informativo
+cum_fcf = np.cumsum(fcf_year_3y)
+payback_year = None
+if np.any(cum_fcf >= 0):
+    first = int(np.argmax(cum_fcf >= 0))
+    payback_year = int(years_3y[first])
+
+d_np = "✅ INVESTIRE" if npv_3y > 0 else "❌ NON INVESTIRE"
+st.markdown(f"### Decisione (NPV 3 anni): **{d_np}**")
+
+cNPV1, cNPV2, cNPV3 = st.columns(3)
+cNPV1.metric("NPV (3 anni)", eur(npv_3y))
+cNPV2.metric("Tasso di sconto", f"{discount_rate*100:.1f}%")
+cNPV3.metric("Payback (indicativo)", f"Entro {payback_year}" if payback_year else "Oltre 3 anni")
+
+if asset_saturation >= 1.0:
+    st.warning("⚠️ Nota operativa: saturazione ≥ 100% con i moduli calcolati. L'NPV può risultare positivo ma l'operatività potrebbe richiedere capacità aggiuntiva.")
+
 df_3y = pd.DataFrame({
     "Anno": years_3y,
     "BEV stimati": np.round(bev_years_3y, 0).astype(int),
@@ -795,7 +822,8 @@ df_3y = pd.DataFrame({
     "CAPEX anno": capex_year_3y,
     "CAPEX cumulato": capex_cum_3y,
     "EBITDA anno": ebitda_year_3y,
-    "EBITDA cumulato": ebitda_cum_3y
+    "EBITDA cumulato": ebitda_cum_3y,
+    "FCF anno": fcf_year_3y
 })
 
 df_3y_fmt = df_3y.copy()
@@ -803,6 +831,7 @@ df_3y_fmt["CAPEX anno"] = df_3y_fmt["CAPEX anno"].apply(eur)
 df_3y_fmt["CAPEX cumulato"] = df_3y_fmt["CAPEX cumulato"].apply(eur)
 df_3y_fmt["EBITDA anno"] = df_3y_fmt["EBITDA anno"].apply(eur)
 df_3y_fmt["EBITDA cumulato"] = df_3y_fmt["EBITDA cumulato"].apply(eur)
+df_3y_fmt["FCF anno"] = df_3y_fmt["FCF anno"].apply(eur)
 
 st.dataframe(df_3y_fmt, use_container_width=True)
 
