@@ -640,7 +640,7 @@ with c4:
     """)
 
 # ============================================================
-# 5) Capacità 1 unità vs domanda città + target cattura (KWH-based)
+# Capacità 1 unità vs domanda città + target cattura (KWH-based)
 # ============================================================
 st.divider()
 
