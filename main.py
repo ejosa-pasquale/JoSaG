@@ -705,143 +705,161 @@ st.divider()
 # SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
 # ============================================================
 st.divider()
-st.subheader("📊 Wizard - Decision Making") 
-# CFO NOTE:
-# Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
-# - Domanda energetica (kWh) calcolata dal funnel
-# - Capacità annua per colonnina (capacita_unit_kwh_anno)
-# - Numero di colonnine richieste n_totale
-# CAPEX anno = (n_totale_anno − n_totale_anno_precedente) × capex_unit
-# Decision Making: ("Conviene installare qui?")
+st.subheader("🧭 Wizard — Unità nel tempo (domanda vs budget vs piano)")
 
-# --- Assunzioni standard di settore
-MODULE_KW = 30
-MODULE_COST = 20_000
-UPTIME = 0.97
+st.caption(
+    "Questa sezione mette **in un'unica tabella** la stessa cosa vista da tre angolazioni:\n"
+    "1) **Unità richieste (domanda)**: quante unità servirebbero per servire la domanda stimata.\n"
+    "2) **Unità installabili (budget)**: quante unità puoi permetterti, anno per anno.\n"
+    "3) **Unità del piano (scelta)**: il rollout effettivo (min tra domanda e budget cumulato)."
+)
+
+# --- Parametri base (allineati al resto del report, con fallback sicuri)
+UNIT_KW = float(globals().get("potenza_kw", 30.0))
+UNIT_COST = float(globals().get("capex_unit", 25_000.0))
+UPTIME = float(globals().get("uptime", 0.97))
+SAT_TARGET = float(globals().get("saturazione_target", 0.80))
 EFFICIENCY = 0.95
-ANTI_QUEUE_SAT = 0.80
+HOURS_PER_DAY = float(globals().get("ore_max_giorno", 24.0))
 
-avg_kwh_session = st.number_input("kWh medi per sessione", value=28.0)
-price_kwh = st.number_input("Prezzo vendita €/kWh", value=0.65)
-energy_cost = st.number_input("Costo energia €/kWh", value=0.25)
-opex_annual = st.number_input("OPEX annuo sito", value=18_000.0)
+st.write("**Assunzioni economiche (Wizard)**")
+cE1, cE2, cE3, cE4 = st.columns(4)
+avg_kwh_session = cE1.number_input("kWh medi per sessione", value=28.0, min_value=5.0, step=1.0)
+price_kwh = cE2.number_input("Prezzo vendita €/kWh", value=0.65, min_value=0.10, step=0.01)
+energy_cost = cE3.number_input("Costo energia €/kWh", value=0.25, min_value=0.01, step=0.01)
+opex_fixed_annual = cE4.number_input("OPEX annuo fisso sito", value=18_000.0, min_value=0.0, step=500.0)
 
-# --- Domanda stimata (ENERGIA target giornaliera)
-public_share_local = st.slider("Quota ricarica pubblica locale (%)", 10, 80, int(public_share*100) if 'public_share' in globals() else 30) / 100
-capture_rate = st.slider("Quota cattura del bacino pubblico (%)", 0.5, 20.0, 3.0) / 100
+scale_opex = st.checkbox("OPEX proporzionale alle unità (oltre al fisso)", value=False)
+opex_per_unit = 0.0
+if scale_opex:
+    opex_per_unit = st.number_input("OPEX annuo per unità", value=float(globals().get("opex_unit", 4_000.0)), min_value=0.0, step=250.0)
 
-kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_rate) / 365
-sessions_target_day = kwh_target_day / max(avg_kwh_session, 1e-9)
+st.write("**Assunzioni domanda (Wizard)**")
+public_share_local = st.slider(
+    "Quota ricarica pubblica locale (%)",
+    10, 80,
+    int(public_share*100) if 'public_share' in globals() else 30
+) / 100
 
+capture_rate = st.slider("Capture rate (quota cattura sul pubblico) (%)", 0.5, 20.0, 3.0) / 100
 
-# --- Capacità per modulo
-hours_day = 24 * UPTIME
-kwh_day_per_module = MODULE_KW * hours_day * EFFICIENCY * ANTI_QUEUE_SAT
-sessions_day_per_module = kwh_day_per_module / avg_kwh_session
+# --- Capacità per unità (kWh/giorno), con saturazione target per evitare code
+kwh_day_per_unit = UNIT_KW * HOURS_PER_DAY * UPTIME * EFFICIENCY * SAT_TARGET
 
-modules_needed = int(np.ceil(kwh_target_day / max(kwh_day_per_module, 1e-9)))
-modules_needed = max(1, modules_needed)
+with st.expander("ℹ️ Cosa significa “unità” qui?", expanded=False):
+    st.markdown(
+        f"- In tutto il report, **1 unità = 1 modulo/colonnina** da circa **{UNIT_KW:.0f} kW**.\n"
+        f"- CAPEX per unità: **{eur(UNIT_COST)}**.\n"
+        f"- Capacità “comfort” per unità: **{kwh_day_per_unit:,.0f} kWh/giorno** (include uptime, efficienza e saturazione target)."
+    )
 
-capex = modules_needed * MODULE_COST
-
-# --- Saturazione asset (anti-coda)
-asset_saturation = kwh_target_day / (kwh_day_per_module * modules_needed)
-
-# --- Economics (energia)
-margin_kwh_simple = price_kwh - energy_cost
-kwh_year = kwh_target_day * 365
-ebitda_annuo = kwh_year * margin_kwh_simple - opex_annual
-cash_flow_simple = ebitda_annuo - capex
-
-# --- Output chiave
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Target (kWh/giorno)", f"{kwh_target_day:,.0f}".replace(",", "."))
-c2.metric("Moduli 30 kW necessari", modules_needed)
-c3.metric("CAPEX Totale", eur(capex))
-c4.metric("Saturazione Asset", pct(asset_saturation))
-c5.metric("EBITDA Annuo", eur(ebitda_annuo))
-
-# Decisione Wizard: basata su NPV a 3 anni (vedi sotto)
-
-# --- Proiezione investimento a 3 anni (Wizard)
-st.subheader("📅 Proiezione investimento a 3 anni (Wizard)")
-
+# --- Orizzonte wizard (3 anni)
 years_3y = np.array([2026, 2027, 2028])
 
 # Stima BEV per anno usando il CAGR selezionato nel sidebar (dataset Sicilia)
 bev_years_3y = np.array([bev_2024 * ((1 + cagr_used) ** (y - 2024)) for y in years_3y])
 
+# Domanda energia target (kWh/giorno)
 kwh_target_day_3y = (bev_years_3y * kwh_annui_per_auto * public_share_local * capture_rate) / 365
 
-modules_needed_3y = np.ceil(kwh_target_day_3y / max(kwh_day_per_module, 1e-9)).astype(int)
-modules_needed_3y = np.maximum(1, modules_needed_3y)
+# Unità richieste dalla domanda (senza vincoli di budget)
+units_demand_3y = np.ceil(kwh_target_day_3y / max(kwh_day_per_unit, 1e-9)).astype(int)
+units_demand_3y = np.maximum(1, units_demand_3y)
 
-# Incrementi anno su anno (capex solo sui nuovi moduli)
-modules_new_3y = np.diff(np.insert(modules_needed_3y, 0, 0))
-capex_year_3y = modules_new_3y * MODULE_COST
-capex_cum_3y = np.cumsum(capex_year_3y)
+st.write("**Budget (Wizard) — quanto puoi investire ogni anno**")
+b1, b2, b3 = st.columns(3)
+budget_2026 = b1.number_input("Budget 2026 (€)", value=25_000.0, min_value=0.0, step=1_000.0)
+budget_2027 = b2.number_input("Budget 2027 (€)", value=25_000.0, min_value=0.0, step=1_000.0)
+budget_2028 = b3.number_input("Budget 2028 (€)", value=25_000.0, min_value=0.0, step=1_000.0)
+budget_3y = np.array([budget_2026, budget_2027, budget_2028], dtype=float)
 
-kwh_year_3y = kwh_target_day_3y * 365
-ebitda_year_3y = (kwh_year_3y * margin_kwh_simple) - opex_annual
-ebitda_cum_3y = np.cumsum(ebitda_year_3y)
+# Unità installabili (budget) e piano effettivo
+units_affordable_new = np.floor(budget_3y / max(UNIT_COST, 1e-9)).astype(int)
+units_affordable_cum = np.cumsum(units_affordable_new)
 
-# --- Decisione su 3 anni: NPV (Net Present Value)
+units_plan_3y = np.minimum(units_demand_3y, units_affordable_cum)  # rollout reale, vincolato dal budget
+units_new_plan_3y = np.diff(np.insert(units_plan_3y, 0, 0))
+capex_year_plan_3y = units_new_plan_3y * UNIT_COST
+capex_cum_plan_3y = np.cumsum(capex_year_plan_3y)
+
+# Energia vendibile: se sei sotto-dimensionato, non puoi vendere oltre la capacità
+kwh_sell_day_3y = np.minimum(kwh_target_day_3y, units_plan_3y * kwh_day_per_unit)
+kwh_sell_year_3y = kwh_sell_day_3y * 365
+
+margin_kwh_simple = price_kwh - energy_cost
+opex_year_3y = opex_fixed_annual + (units_plan_3y * opex_per_unit if scale_opex else 0.0)
+
+ebitda_year_3y = (kwh_sell_year_3y * margin_kwh_simple) - opex_year_3y
+fcf_year_3y = ebitda_year_3y - capex_year_plan_3y
+
+# --- NPV a 3 anni (criterio decisionale del Wizard)
 discount_rate = st.slider("Tasso di sconto per NPV (%)", 6.0, 12.0, 8.0, 0.5) / 100
-
-# Free Cash Flow anno = EBITDA anno − CAPEX incrementale (solo nuovi moduli)
-fcf_year_3y = ebitda_year_3y - capex_year_3y
-
-# NPV a 3 anni (flussi a fine anno t=1..3)
 t = np.arange(1, len(years_3y) + 1)
 npv_3y = float(np.sum(fcf_year_3y / ((1 + discount_rate) ** t)))
 
-# Payback (anni) su flussi NON scontati, informativo
 cum_fcf = np.cumsum(fcf_year_3y)
 payback_year = None
 if np.any(cum_fcf >= 0):
-    first = int(np.argmax(cum_fcf >= 0))
-    payback_year = int(years_3y[first])
+    payback_year = int(years_3y[int(np.argmax(cum_fcf >= 0))])
 
-d_np = "✅ INVESTIRE" if npv_3y > 0 else "❌ NON INVESTIRE"
-st.markdown(f"### Decisione (NPV 3 anni): **{d_np}**")
+decision_txt = "✅ INVESTIRE" if npv_3y > 0 else "❌ NON INVESTIRE"
 
-cNPV1, cNPV2, cNPV3 = st.columns(3)
-cNPV1.metric("NPV (3 anni)", eur(npv_3y))
-cNPV2.metric("Tasso di sconto", f"{discount_rate*100:.1f}%")
-cNPV3.metric("Payback (indicativo)", f"Entro {payback_year}" if payback_year else "Oltre 3 anni")
+# --- KPI in testata: separo bene domanda vs piano
+kA, kB, kC, kD, kE = st.columns(5)
+kA.metric("Unità richieste 2026 (domanda)", int(units_demand_3y[0]))
+kB.metric("Unità piano 2026 (budget)", int(units_plan_3y[0]))
+kC.metric("CAPEX 2026 (piano)", eur(float(capex_year_plan_3y[0])))
+kD.metric("NPV (3 anni)", eur(npv_3y))
+kE.metric("Decisione Wizard", decision_txt)
 
-if asset_saturation >= 1.0:
-    st.warning("⚠️ Nota operativa: saturazione ≥ 100% con i moduli calcolati. L'NPV può risultare positivo ma l'operatività potrebbe richiedere capacità aggiuntiva.")
-
-df_3y = pd.DataFrame({
+# --- Tabella unica (source of truth)
+df_wizard = pd.DataFrame({
     "Anno": years_3y,
     "BEV stimati": np.round(bev_years_3y, 0).astype(int),
-    "Target kWh/giorno": np.round(kwh_target_day_3y, 0).astype(int),
-    "Moduli totali (30 kW)": modules_needed_3y,
-    "Nuovi moduli": modules_new_3y,
-    "CAPEX anno": capex_year_3y,
-    "CAPEX cumulato": capex_cum_3y,
+    "Domanda (kWh/g)": np.round(kwh_target_day_3y, 0).astype(int),
+    "Unità richieste (domanda)": units_demand_3y,
+    "Unità installabili (budget, cum)": units_affordable_cum,
+    "Unità piano (installate)": units_plan_3y,
+    "Nuove unità (piano)": units_new_plan_3y,
+    "CAPEX anno (piano)": capex_year_plan_3y,
+    "CAPEX cumulato (piano)": capex_cum_plan_3y,
+    "kWh vendibili (kWh/g)": np.round(kwh_sell_day_3y, 0).astype(int),
     "EBITDA anno": ebitda_year_3y,
-    "EBITDA cumulato": ebitda_cum_3y,
-    "FCF anno": fcf_year_3y
+    "FCF anno": fcf_year_3y,
 })
 
-df_3y_fmt = df_3y.copy()
-df_3y_fmt["CAPEX anno"] = df_3y_fmt["CAPEX anno"].apply(eur)
-df_3y_fmt["CAPEX cumulato"] = df_3y_fmt["CAPEX cumulato"].apply(eur)
-df_3y_fmt["EBITDA anno"] = df_3y_fmt["EBITDA anno"].apply(eur)
-df_3y_fmt["EBITDA cumulato"] = df_3y_fmt["EBITDA cumulato"].apply(eur)
-df_3y_fmt["FCF anno"] = df_3y_fmt["FCF anno"].apply(eur)
+df_wizard_fmt = df_wizard.copy()
+df_wizard_fmt["CAPEX anno (piano)"] = df_wizard_fmt["CAPEX anno (piano)"].apply(eur)
+df_wizard_fmt["CAPEX cumulato (piano)"] = df_wizard_fmt["CAPEX cumulato (piano)"].apply(eur)
+df_wizard_fmt["EBITDA anno"] = df_wizard_fmt["EBITDA anno"].apply(eur)
+df_wizard_fmt["FCF anno"] = df_wizard_fmt["FCF anno"].apply(eur)
 
-st.dataframe(df_3y_fmt, use_container_width=True)
+st.dataframe(df_wizard_fmt, use_container_width=True)
 
-with st.expander("📝 Note proiezione 3 anni", expanded=False):
-    st.write(
-        "La proiezione usa il **CAGR** selezionato nel sidebar (dataset Sicilia) per stimare i BEV anno per anno. "
-        "Da lì ricalcola domanda (kWh/giorno), moduli necessari e **CAPEX solo sui nuovi moduli**. "
-        "OPEX e margine €/kWh sono assunti costanti."
+# --- Grafico chiaro: domanda vs budget vs piano
+figU, axU = plt.subplots()
+axU.plot(years_3y, units_demand_3y, linewidth=3, label="Unità richieste (domanda)")
+axU.plot(years_3y, units_affordable_cum, linewidth=3, label="Unità installabili (budget cum)")
+axU.plot(years_3y, units_plan_3y, linewidth=4, label="Unità piano (installate)")
+axU.set_xlabel("Anno")
+axU.set_ylabel("Numero unità")
+axU.set_xticks(years_3y)
+axU.grid(True, alpha=0.25)
+axU.legend()
+st.pyplot(figU, use_container_width=True)
+
+with st.expander("📌 Lettura rapida (perché a volte “domanda=3” ma “piano=1”)", expanded=False):
+    st.markdown(
+        "- **Unità richieste (domanda)** risponde a: *quante unità servirebbero per servire il mercato?*\n"
+        "- **Unità piano (installate)** risponde a: *quante unità posso mettere davvero con il budget disponibile?*\n"
+        "- Se il piano è più basso della domanda, la colonna **kWh vendibili** ti mostra che la vendita è **limitata dalla capacità**."
     )
 
+# Salvo in session_state per riuso in altre sezioni (coerenza del report)
+st.session_state["wizard_units_table"] = df_wizard
+st.session_state["wizard_units_plan_3y"] = units_plan_3y
+st.session_state["wizard_units_demand_3y"] = units_demand_3y
+st.session_state["wizard_npv_3y"] = npv_3y
 # ============================================================
 
 
