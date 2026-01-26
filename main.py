@@ -174,6 +174,13 @@ with st.sidebar.expander("🏦 Modalità CFO (tasse, WC, scenari, tornado)", exp
     # scenario pack
     scenario_view = st.selectbox("Scenario da visualizzare", ["Base", "Bear", "Bull"], index=0)
 
+bev_2024_per_citta = {
+    "AGRIGENTO": 521,
+    "CALTANISSETTA": 318,
+    "PALERMO": 1240,
+    "CATANIA": 1420
+    }
+
 # ============================================================
 # LOGICA (pdf-like + manager-friendly)
 # ============================================================
@@ -193,12 +200,7 @@ else:
     # ===============================
     # SCENARIO BEV CITTÀ
     # ===============================
-    bev_2024_per_citta = {
-    "AGRIGENTO": 521,
-    "CALTANISSETTA": 318,
-    "PALERMO": 1240,
-    "CATANIA": 1420
-    }
+    
     bev_start = bev_2024_per_citta.get(citta, 0) 
     bev_citta = np.linspace(bev_start, bev_base_2030, len(years))
 
