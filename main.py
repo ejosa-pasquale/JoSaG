@@ -528,7 +528,7 @@ for a, b, units in segments_all:
 
 df_fasi = pd.DataFrame(fase_rows)
 
-with st.expander("🧩 Fasi (rollout) — lettura semplice del piano", expanded=False):
+with st.expander("🧩 Fasi (rollout) ", expanded=False):
     if df_fasi.empty:
         st.info("In nessun anno il modello consiglia installazioni (unità consigliate = 0).")
     else:
