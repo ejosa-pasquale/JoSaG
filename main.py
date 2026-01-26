@@ -372,7 +372,7 @@ SCENARIOS = {
 # ============================================================
 # SEZIONE DATI SICILIA (chiara, per contestualizzare Palermo)
 # ============================================================
-st.subheader("🗺️ Dati BEV Sicilia (2015–2025)")
+st.subheader("🗺️ Dati BEV Sicilia (2015–2024) — trasparenza territorio")
 st.caption("Questi dati sono il fondamento territoriale del tool: puoi selezionare una provincia e vedere la crescita storica.")
 
 col_d1, col_d2 = st.columns([1, 1])
@@ -481,6 +481,62 @@ if int(n_rec.max()) > 1:
         st.info("📅 Piano consigliato (segmentazione per anno):\n" + "\n".join(seg_txt))
 
 st.dataframe(df_decision, use_container_width=True)
+
+# --- Fasi di rollout (più leggibile: cosa succede quando crescono le unità) ---
+# Costruisco una tabella "a fasi" raggruppando gli anni con lo stesso numero di unità consigliate.
+segments_all = []
+cur_n = int(n_rec[0]) if len(n_rec) else 0
+start_y = int(years[0]) if len(years) else 0
+for i in range(1, len(years)):
+    if int(n_rec[i]) != cur_n:
+        segments_all.append((start_y, int(years[i-1]), cur_n))
+        cur_n = int(n_rec[i])
+        start_y = int(years[i])
+if len(years):
+    segments_all.append((start_y, int(years[-1]), cur_n))
+
+fase_rows = []
+prev_units = 0
+fase_idx = 0
+for a, b, units in segments_all:
+    # salto fasi a 0 unità
+    if units <= 0:
+        prev_units = max(prev_units, units)
+        continue
+    fase_idx += 1
+    nuove = max(0, units - prev_units)
+    capex_fase = nuove * capex_unit
+
+    if allocazione == "Multisito (Espansione in B)":
+        unita_A = 1 if units >= 1 else 0
+        unita_B = max(0, units - 1)
+        nota_loc = f"A={unita_A}, B={unita_B}"
+    else:
+        unita_A = units
+        unita_B = 0
+        nota_loc = f"A={unita_A}"
+
+    fase_rows.append({
+        "Fase": f"Fase {fase_idx}",
+        "Anni": f"{a}" if a == b else f"{a}–{b}",
+        "Unità consigliate": int(units),
+        "Nuove unità (inizio fase)": int(nuove),
+        "CAPEX (inizio fase)": int(capex_fase),
+        "Distribuzione location": nota_loc,
+    })
+    prev_units = units
+
+df_fasi = pd.DataFrame(fase_rows)
+
+with st.expander("🧩 Fasi (rollout) — lettura semplice del piano", expanded=False):
+    if df_fasi.empty:
+        st.info("In nessun anno il modello consiglia installazioni (unità consigliate = 0).")
+    else:
+        st.dataframe(df_fasi, use_container_width=True)
+        st.caption(
+            "Questa tabella raggruppa gli anni in **fasi operative**: quando il numero di unità consigliate cambia, "
+            "parte una nuova fase. Il CAPEX è conteggiato solo sulle **nuove unità** installate all'inizio della fase."
+        )
 
 # --- CAPEX anno per anno (stile budgeting) ---
 capex_years = years[:3] if len(years) >= 3 else years
@@ -640,16 +696,16 @@ with c4:
     """)
 
 # ============================================================
-# Capacità 1 unità vs domanda città + target cattura (KWH-based)
+# 5) Capacità 1 unità vs domanda città + target cattura (KWH-based)
 # ============================================================
 st.divider()
 
 
 # ============================================================
-# Wizard Decision Making & CAPEX (Moduli 30 kW)
+# SEZIONE 7 — Decision Making & CAPEX (Moduli 30 kW)
 # ============================================================
 st.divider()
-st.subheader("📊 Wizard Decision Making & CAPEX") 
+st.subheader("📊 Sezione 7") 
 # CFO NOTE:
 # Le decisioni di investimento (CAPEX) derivano ESCLUSIVAMENTE da:
 # - Domanda energetica (kWh) calcolata dal funnel
@@ -694,8 +750,8 @@ asset_saturation = kwh_target_day / (kwh_day_per_module * modules_needed)
 # --- Economics (energia)
 margin_kwh_simple = price_kwh - energy_cost
 kwh_year = kwh_target_day * 365
-ebitda = kwh_year * margin_kwh_simple - opex_annual
-cash_flow = ebitda - capex
+ebitda_annuo = kwh_year * margin_kwh_simple - opex_annual
+cash_flow_simple = ebitda_annuo - capex
 
 # --- Output chiave
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -703,10 +759,63 @@ c1.metric("Target (kWh/giorno)", f"{kwh_target_day:,.0f}".replace(",", "."))
 c2.metric("Moduli 30 kW necessari", modules_needed)
 c3.metric("CAPEX Totale", eur(capex))
 c4.metric("Saturazione Asset", pct(asset_saturation))
-c5.metric("EBITDA Annuo", eur(ebitda))
+c5.metric("EBITDA Annuo", eur(ebitda_annuo))
 
-decision = "✅ INVESTIRE" if ebitda > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
+decision = "✅ INVESTIRE" if ebitda_annuo > 0 and asset_saturation < 1.0 else "❌ NON INVESTIRE"
 st.markdown(f"### Decisione: **{decision}**")
+
+# --- Proiezione investimento a 3 anni (Wizard)
+st.subheader("📅 Proiezione investimento a 3 anni (Wizard)")
+
+years_3y = np.array([2026, 2027, 2028])
+
+# Stima BEV per anno usando il CAGR selezionato nel sidebar (dataset Sicilia)
+bev_years_3y = np.array([bev_2024 * ((1 + cagr_used) ** (y - 2024)) for y in years_3y])
+
+kwh_target_day_3y = (bev_years_3y * kwh_annui_per_auto * public_share_local * capture_rate) / 365
+
+modules_needed_3y = np.ceil(kwh_target_day_3y / max(kwh_day_per_module, 1e-9)).astype(int)
+modules_needed_3y = np.maximum(1, modules_needed_3y)
+
+# Incrementi anno su anno (capex solo sui nuovi moduli)
+modules_new_3y = np.diff(np.insert(modules_needed_3y, 0, 0))
+capex_year_3y = modules_new_3y * MODULE_COST
+capex_cum_3y = np.cumsum(capex_year_3y)
+
+kwh_year_3y = kwh_target_day_3y * 365
+ebitda_year_3y = (kwh_year_3y * margin_kwh_simple) - opex_annual
+ebitda_cum_3y = np.cumsum(ebitda_year_3y)
+
+df_3y = pd.DataFrame({
+    "Anno": years_3y,
+    "BEV stimati": np.round(bev_years_3y, 0).astype(int),
+    "Target kWh/giorno": np.round(kwh_target_day_3y, 0).astype(int),
+    "Moduli totali (30 kW)": modules_needed_3y,
+    "Nuovi moduli": modules_new_3y,
+    "CAPEX anno": capex_year_3y,
+    "CAPEX cumulato": capex_cum_3y,
+    "EBITDA anno": ebitda_year_3y,
+    "EBITDA cumulato": ebitda_cum_3y
+})
+
+df_3y_fmt = df_3y.copy()
+df_3y_fmt["CAPEX anno"] = df_3y_fmt["CAPEX anno"].apply(eur)
+df_3y_fmt["CAPEX cumulato"] = df_3y_fmt["CAPEX cumulato"].apply(eur)
+df_3y_fmt["EBITDA anno"] = df_3y_fmt["EBITDA anno"].apply(eur)
+df_3y_fmt["EBITDA cumulato"] = df_3y_fmt["EBITDA cumulato"].apply(eur)
+
+st.dataframe(df_3y_fmt, use_container_width=True)
+
+with st.expander("📝 Note proiezione 3 anni", expanded=False):
+    st.write(
+        "La proiezione usa il **CAGR** selezionato nel sidebar (dataset Sicilia) per stimare i BEV anno per anno. "
+        "Da lì ricalcola domanda (kWh/giorno), moduli necessari e **CAPEX solo sui nuovi moduli**. "
+        "OPEX e margine €/kWh sono assunti costanti."
+    )
+
+# ============================================================
+
+
 
 # ============================================================
 
