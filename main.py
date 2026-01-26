@@ -191,9 +191,10 @@ if pdf_lock:
     quota_stazione = np.array([0.02, 0.03, 0.04, 0.045, 0.05], dtype=float) * stress_cattura
 else:
    # ===============================
-# SCENARIO BEV CITTÀ (Opzione A – ancorato a dato reale)
-# ===============================
+    # SCENARIO BEV CITTÀ
+    # ===============================
     bev_start = bev_2024_per_citta[citta]
+    
     bev_citta = np.linspace( bev_start, bev_base_2030,len(years))
 
 # Stress test adozione BEV
