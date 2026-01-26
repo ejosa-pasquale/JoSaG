@@ -1323,11 +1323,11 @@ try:
 except Exception:
     opex_annual = float(globals().get("opex_fixed_annual", 0.0))
 
-capex_2024 = _to_float(globals().get(\"modules_needed\", globals().get(\"n_totale\", 0.0)), 0.0) * _to_float(globals().get(\"capex_unit\", 0.0), 0.0)
+capex_2024 = _to_float(globals().get(\"modules_needed\", globals().get("n_totale", 0.0)), 0.0) * _to_float(globals().get(\"capex_unit\", 0.0), 0.0)
 
 # Robust fallbacks for executive table (avoid NameError if upstream variables change)
-modules_needed_exec = _to_int(globals().get(\"modules_needed\", globals().get(\"n_totale\", 0)), 0)
-asset_saturation_exec = _to_float(globals().get(\"asset_saturation\", globals().get(\"saturazione_asset\", 0.0)), 0.0)
+modules_needed_exec = _to_int(globals().get("modules_needed", globals().get("n_totale", 0)), 0)
+asset_saturation_exec = _to_float(globals().get("asset_saturation", globals().get("saturazione_asset", 0.0)), 0.0)
 
 years = list(range(2024, 2031))
 cum_cf = 0
