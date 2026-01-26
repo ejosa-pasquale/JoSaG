@@ -528,7 +528,7 @@ for a, b, units in segments_all:
 
 df_fasi = pd.DataFrame(fase_rows)
 
-with st.expander("🧩 Fasi (rollout) ", expanded=False):
+with st.expander("🧩 Fasi (rollout) — lettura semplice del piano", expanded=False):
     if df_fasi.empty:
         st.info("In nessun anno il modello consiglia installazioni (unità consigliate = 0).")
     else:
@@ -1267,6 +1267,11 @@ Applica questo moltiplicatore **prima** del calcolo energia/funnel:
 # SEZIONE 8 — Executive Investment Summary
 # ============================================================
 st.subheader("📈 Executive Investment Summary")
+
+# Base domanda 2024 (kWh/giorno) usata come riferimento per la crescita
+capture_eff = capture_rate * float(st.session_state.get("competition_factor", 1.0))
+kwh_target_day = (bev_2024 * kwh_annui_per_auto * public_share_local * capture_eff) / 365
+
 
 years = list(range(2024, 2031))
 cum_cf = 0
