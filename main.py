@@ -1380,7 +1380,6 @@ st.table(bd)
 
 import json
 import math
-import os
 import pathlib
 import urllib.request
 import zipfile
@@ -1398,11 +1397,11 @@ st.markdown(
 Questa sezione stima il **traffico veicolare** vicino a un punto geografico
 utilizzando **open data ufficiali**.
 
-### Fonti
-- **ANAS / MIT – TGMA (2015)** → veicoli/giorno (dato numerico)
+### Fonti utilizzate
+- **ANAS / MIT – TGMA (2015)** → traffico medio giornaliero (veicoli/giorno)
 - **Comune di Palermo – PGTU (2009)** → flussi urbani storici (best-effort)
 
-> ⚠️ I dati NON sono realtime.  
+> ⚠️ I dati NON sono realtime e NON puntuali sulla singola via.  
 > Servono come **proxy strutturale** per analisi territoriali e modelli economici.
 """
 )
@@ -1428,7 +1427,7 @@ class TrafficProvider(Protocol):
 
 
 # ------------------------------------------------------------
-# Utility distanza (robusta)
+# Utility: distanza robusta (mai errori matematici)
 # ------------------------------------------------------------
 def haversine_m(lat1, lon1, lat2, lon2):
     try:
@@ -1492,8 +1491,8 @@ class AnasTgma2015Provider:
             gdf = self._load()
         except Exception as e:
             return [TrafficEstimate(
-                float("nan"), "(error)", "TGMA", self.name,
-                (lat, lon), 0.0, {"error": str(e)}
+                float("nan"), "(error)", "TGMA 2015",
+                self.name, (lat, lon), 0.0, {"error": str(e)}
             )]
 
         field = next((c for c in gdf.columns if c.upper().startswith("TGM")), None)
@@ -1525,13 +1524,14 @@ class AnasTgma2015Provider:
                 best = est
 
         return [best] if best else [TrafficEstimate(
-            float("nan"), "(no data in radius)", "TGMA", self.name,
-            (lat, lon), radius_m, {}
+            float("nan"), "(no data in radius)", "TGMA 2015",
+            self.name, (lat, lon), radius_m,
+            {"info": "Nessuna stazione ANAS nel raggio"}
         )]
 
 
 # ------------------------------------------------------------
-# Provider 2 — Palermo PGTU 2009 (best-effort)
+# Provider 2 — Palermo PGTU 2009 (CSV, encoding FIX)
 # ------------------------------------------------------------
 class PalermoTraffic2009Provider:
     name = "Palermo – PGTU flussi traffico (2009)"
@@ -1540,22 +1540,32 @@ class PalermoTraffic2009Provider:
 
     def query(self, lat, lon, radius_m):
         try:
-            df = pd.read_csv(self.CSV_URL, sep=None, engine="python")
+            df = pd.read_csv(
+                self.CSV_URL,
+                sep=None,
+                engine="python",
+                encoding="latin-1"
+            )
         except Exception as e:
             return [TrafficEstimate(
-                float("nan"), "(error)", "2009", self.name,
-                (lat, lon), 0.0, {"error": str(e)}
+                float("nan"), "(error)", "2009",
+                self.name, (lat, lon), 0.0,
+                {"error": f"Errore lettura CSV Palermo: {e}"}
             )]
 
         cols = {c.upper(): c for c in df.columns}
+
         lat_col = next((cols[c] for c in cols if "LAT" in c), None)
-        lon_col = next((cols[c] for c in cols if "LON" in c), None)
-        flow_col = next((c for c in df.columns if "FLUS" in c.upper() or "VEIC" in c.upper()), None)
+        lon_col = next((cols[c] for c in cols if "LON" in c or "LONG" in c), None)
+        flow_col = next(
+            (c for c in df.columns if "FLUS" in c.upper() or "VEIC" in c.upper()),
+            None
+        )
 
         if not (lat_col and lon_col and flow_col):
             return [TrafficEstimate(
-                float("nan"), "(dataset not geocoded)", "2009", self.name,
-                (lat, lon), radius_m,
+                float("nan"), "(dataset not geocoded)", "2009",
+                self.name, (lat, lon), radius_m,
                 {"columns": list(df.columns)}
             )]
 
@@ -1574,7 +1584,7 @@ class PalermoTraffic2009Provider:
                 continue
 
             est = TrafficEstimate(
-                val, "vehicles/day", "PGTU 2009",
+                val, "vehicles/day", "PGTU Palermo 2009",
                 self.name, (r[lat_col], r[lon_col]), d,
                 {"flow_column": flow_col}
             )
@@ -1583,7 +1593,8 @@ class PalermoTraffic2009Provider:
 
         return [best] if best else [TrafficEstimate(
             float("nan"), "(no data in radius)", "2009",
-            self.name, (lat, lon), radius_m, {}
+            self.name, (lat, lon), radius_m,
+            {"info": "Nessuna sezione PGTU nel raggio"}
         )]
 
 
@@ -1605,7 +1616,7 @@ class SicilyTraffic:
 
 
 # ------------------------------------------------------------
-# UI
+# UI Streamlit
 # ------------------------------------------------------------
 st.markdown("### 🔍 Calcolo traffico per coordinate")
 
