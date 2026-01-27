@@ -1376,13 +1376,9 @@ st.table(bd)
 
 
 # ============================================================
-# SEZIONE 10 — Traffico veicolare
-# ============================================================
-# Modulo di analisi traffico veicolare basato su fonti pubbliche (beta)
+# SEZIONE 10 — Analisi traffico veicolare da fonti pubbliche (beta)
 # ============================================================
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple
 import json
 import math
 import os
@@ -1390,18 +1386,20 @@ import pathlib
 import urllib.parse
 import urllib.request
 import zipfile
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 st.subheader("🚗 Sezione 10 — Analisi traffico veicolare da fonti pubbliche (beta)")
 
 st.markdown(
     """
 In questa sezione puoi inserire **latitudine** e **longitudine** e provare a stimare il
-**traffico veicolare** vicino al punto selezionato usando alcune **banche dati pubbliche**:
+**traffico veicolare** vicino al punto selezionato usando alcune **banche dati pubbliche**.
+
+Al momento la parte **numerica** utilizza:
 
 - **ANAS / MIT – Traffico Giornaliero Medio (TGMA)**: valore medio di veicoli/giorno su stazioni di misura,
-  utile su strade extraurbane.
-- **Cataloghi open data (CKAN: dati.gov.it, Regione Siciliana)**: usati in questa versione
-  solo per *scoprire* dataset candidati (non restituiscono un numero diretto, ma link ai dataset).
+  utile soprattutto per strade extraurbane (snapshot Novembre 2015).
 
 > ⚠️ Si tratta di un modulo *sperimentale*: il risultato può essere **assente** o **non aggiornato**
 > a seconda della copertura sensori/dataset e dell'anno di rilevazione.
@@ -1438,7 +1436,7 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * (math.sin(dl / 2) ** 2)
 
-    # 🔒 Clamp per evitare errori numerici (a leggermente <0 o >1)
+    # Clamp per evitare errori numerici (a leggermente <0 o >1) che causano "math domain error"
     if a < 0.0:
         a = 0.0
     elif a > 1.0:
@@ -1446,7 +1444,6 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
     return R * c
-
 
 
 def http_get_json(url: str, timeout: int = 30) -> Dict[str, Any]:
@@ -1467,72 +1464,12 @@ def download_file(url: str, dst: pathlib.Path, timeout: int = 60) -> pathlib.Pat
 
 
 # -----------------------------
-# Provider: CKAN catalog (solo discovery metadati)
-# -----------------------------
-class CkanCatalogProvider:
-    """Cerca dataset relativi a traffico/flussi nei cataloghi CKAN (es. dati.gov.it)."""
-
-    def __init__(self, base_url: str, name: str, keywords: Optional[List[str]] = None):
-        self.base_url = base_url.rstrip("/")
-        self.name = name
-        self.keywords = keywords or [
-            "traffico", "flussi", "conteggi", "veicoli", "spire", "sensori", "mobilità"
-        ]
-
-    def _package_search(self, q: str, rows: int = 20) -> Dict[str, Any]:
-        endpoint = f"{self.base_url}/api/3/action/package_search"
-        params = {"q": q, "rows": str(rows)}
-        url = endpoint + "?" + urllib.parse.urlencode(params)
-        return http_get_json(url)
-
-    def query(self, lat: float, lon: float, radius_m: float = 1000) -> List[TrafficEstimate]:
-        results: List[TrafficEstimate] = []
-        q = " OR ".join(self.keywords)
-        try:
-            data = self._package_search(q=q, rows=20)
-        except Exception as e:
-            return [
-                TrafficEstimate(
-                    value=float("nan"),
-                    unit="(error)",
-                    period="catalog discovery",
-                    source=self.name,
-                    location=(lat, lon),
-                    distance_m=0.0,
-                    details={"error": str(e)},
-                )
-            ]
-
-        if not data.get("success"):
-            return results
-
-        for pkg in data["result"].get("results", []):
-            title = pkg.get("title") or pkg.get("name")
-            url = f"{self.base_url}/dataset/{pkg.get('name')}"
-            results.append(
-                TrafficEstimate(
-                    value=float("nan"),
-                    unit="(dataset)",
-                    period="catalog discovery (no direct count)",
-                    source=self.name,
-                    location=(lat, lon),
-                    distance_m=0.0,
-                    details={
-                        "dataset_title": title,
-                        "dataset_url": url,
-                        "notes": (pkg.get("notes") or "")[:300],
-                    },
-                )
-            )
-        return results
-
-
-# -----------------------------
 # Provider: ANAS TGMA (MIT Open Data shapefile, Nov 2015)
 # -----------------------------
 class AnasTgma2015Provider:
     name = "ANAS TGMA (MIT Open Data, Nov 2015)"
 
+    # URL dello shapefile TGMA (Nov 2015) dal catalogo MIT
     TGM_ZIP_URL = (
         "https://dati.mit.gov.it/catalog/dataset/a9b851f0-cb05-4e7e-ae43-040926a368db/"
         "resource/09935ff0-da89-4b11-afe9-9902fad9ea57/download/tgm_nov2015.zip"
@@ -1552,6 +1489,7 @@ class AnasTgma2015Provider:
         return self._extracted_dir
 
     def query(self, lat: float, lon: float, radius_m: float = 20000) -> List[TrafficEstimate]:
+        """Ritorna la stazione TGMA più vicina entro radius_m, se esiste."""
         try:
             import geopandas as gpd  # type: ignore
         except ImportError as e:
@@ -1565,7 +1503,10 @@ class AnasTgma2015Provider:
                     location=(lat, lon),
                     distance_m=0.0,
                     details={
-                        "error": "Per usare questo provider installa geopandas + shapely + fiona (pip install geopandas).",
+                        "error": (
+                            "Per usare questo provider installa geopandas (e dipendenze GIS) "
+                            "es. `pip install geopandas`."
+                        ),
                         "exception": str(e),
                     },
                 )
@@ -1575,22 +1516,44 @@ class AnasTgma2015Provider:
 
         shp_files = list(data_dir.rglob("*.shp"))
         if not shp_files:
-            return []
+            return [
+                TrafficEstimate(
+                    value=float("nan"),
+                    unit="(no data)",
+                    period="TGMA (mean annual daily traffic)",
+                    source=self.name,
+                    location=(lat, lon),
+                    distance_m=0.0,
+                    details={"error": "Nessun shapefile TGMA trovato nel dataset MIT."},
+                )
+            ]
 
         gdf = gpd.read_file(shp_files[0])
 
+        # Possibili nomi del campo con il TGMA
         candidates = ["TGMA", "TGM", "TRAFFICO", "TRAFF_GM", "TGM_NOV15"]
         tgm_field = next((c for c in candidates if c in gdf.columns), None)
         if tgm_field is None:
-            return []
+            return [
+                TrafficEstimate(
+                    value=float("nan"),
+                    unit="(no field)",
+                    period="TGMA (mean annual daily traffic)",
+                    source=self.name,
+                    location=(lat, lon),
+                    distance_m=0.0,
+                    details={"error": "Campo TGMA/TGM non trovato nello shapefile."},
+                )
+            ]
 
-        # coordinate in WGS84
+        # Coordinate in WGS84
         if gdf.crs is None:
             gdf = gdf.set_crs("EPSG:4326", allow_override=True)
         elif str(gdf.crs).lower() not in ("epsg:4326", "wgs84"):
             gdf = gdf.to_crs("EPSG:4326")
 
         best: Optional[TrafficEstimate] = None
+
         for _, row in gdf.iterrows():
             geom = row.geometry
             if geom is None:
@@ -1621,7 +1584,21 @@ class AnasTgma2015Provider:
             if best is None or est.distance_m < best.distance_m:
                 best = est
 
-        return [best] if best else []
+        if best:
+            return [best]
+
+        # Nessuna stazione entro il raggio: restituisco riga informativa
+        return [
+            TrafficEstimate(
+                value=float("nan"),
+                unit="(no data in radius)",
+                period="TGMA (mean annual daily traffic) - Nov 2015 snapshot",
+                source=self.name,
+                location=(lat, lon),
+                distance_m=radius_m,
+                details={"error": "Nessuna stazione TGMA nel raggio richiesto."},
+            )
+        ]
 
 
 # -----------------------------
@@ -1631,8 +1608,9 @@ class SicilyTraffic:
     def __init__(self, providers: Optional[List[TrafficProvider]] = None):
         self.providers = providers or [
             AnasTgma2015Provider(),
-            CkanCatalogProvider("https://www.dati.gov.it", name="dati.gov.it (CKAN)"),
-            CkanCatalogProvider("https://dati.regione.sicilia.it", name="Regione Siciliana Open Data (CKAN)"),
+            # Se in futuro vuoi riattivare i cataloghi CKAN per discovery:
+            # CkanCatalogProvider("https://www.dati.gov.it", name="dati.gov.it (CKAN)"),
+            # CkanCatalogProvider("https://dati.regione.sicilia.it", name="Regione Siciliana Open Data (CKAN)"),
         ]
 
     def query(self, lat: float, lon: float, radius_m: float = 20000) -> List[TrafficEstimate]:
@@ -1652,6 +1630,7 @@ class SicilyTraffic:
                         details={"error": str(e)},
                     )
                 )
+
         # ordina: prima numerici, poi discovery/error
         def sort_key(x: TrafficEstimate):
             numeric = 0 if (x.value == x.value) else 1  # NaN != NaN
@@ -1667,20 +1646,30 @@ st.markdown("### 🔍 Query traffico per coordinate")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    lat_input = st.number_input("Latitudine", format="%.6f", value=37.502000)
+    lat_input = st.number_input("Latitudine", format="%.6f", value=38.115700)
 with col2:
-    lon_input = st.number_input("Longitudine", format="%.6f", value=15.087000)
+    lon_input = st.number_input("Longitudine", format="%.6f", value=13.361500)
 with col3:
-    radius_km = st.number_input("Raggio ricerca (km)", min_value=1.0, max_value=100.0, value=20.0)
+    radius_km = st.number_input("Raggio ricerca (km)", min_value=1.0, max_value=200.0, value=50.0)
 
 if st.button("Calcola traffico veicolare (beta)"):
-    with st.spinner("Interrogo le fonti pubbliche (ANAS / cataloghi open data)..."):
+    with st.spinner("Interrogo il dataset ANAS/MIT sul Traffico Giornaliero Medio..."):
         svc = SicilyTraffic()
         results = svc.query(lat_input, lon_input, radius_m=radius_km * 1000)
 
     if not results:
         st.warning("Nessun risultato trovato nel raggio selezionato.")
     else:
+        # separo risultati con valore numerico da quelli solo descrittivi/errore
+        numeric_results = [r for r in results if r.value == r.value]  # NaN != NaN
+
+        if not numeric_results:
+            st.warning(
+                "Nessun valore numerico di traffico (es. veicoli/giorno) trovato. "
+                "È possibile che per questa zona non ci siano stazioni TGMA vicine "
+                "oppure che manchino dati nel dataset."
+            )
+
         # Tabella riassuntiva
         rows = []
         for r in results:
@@ -1696,8 +1685,16 @@ if st.button("Calcola traffico veicolare (beta)"):
             )
         st.dataframe(rows, use_container_width=True)
 
+        # se vedo dipendenze mancanti nel provider ANAS, esplicito cosa installare
+        if any("missing dependency" in (r.unit or "") for r in results):
+            st.error(
+                "Per abilitare il calcolo del traffico ANAS TGMA è necessario installare il pacchetto "
+                "`geopandas` (che a sua volta richiede shapely / fiona / pyproj). "
+                "Esempio: `pip install geopandas`."
+            )
+
         st.caption(
-            "Le misure numeriche (es. veicoli/giorno) derivano in questa versione dal dataset "
-            "ANAS/MIT sul Traffico Giornaliero Medio (TGMA), dove presente. "
-            "Gli altri record mostrano solo dataset/metadati scoperti nei cataloghi CKAN."
+            "Le misure numeriche (es. veicoli/giorno) derivano dal dataset ANAS/MIT "
+            "sul Traffico Giornaliero Medio (TGMA) aggiornato a Novembre 2015. "
+            "Per zone senza stazioni nel raggio selezionato viene indicata la mancanza di dati."
         )
