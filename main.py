@@ -1374,7 +1374,6 @@ bd = pd.DataFrame({
 
 st.table(bd)
 
-
 # ============================================================
 # SEZIONE 10 — Analisi traffico veicolare da fonti pubbliche (beta)
 # ============================================================
@@ -1428,29 +1427,34 @@ class TrafficProvider(Protocol):
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Distanza in metri fra due coordinate WGS84 (versione robusta)."""
-    R = 6371000.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
+    """Distanza in metri fra due coordinate WGS84 (versione ultra-robusta)."""
+    try:
+        R = 6371000.0
+        phi1, phi2 = math.radians(lat1), math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dl = math.radians(lon2 - lon1)
 
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * (math.sin(dl / 2) ** 2)
+        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * (math.sin(dl / 2) ** 2)
 
-    # Clamp per evitare errori numerici (a leggermente <0 o >1) che causano "math domain error"
-    if a < 0.0:
-        a = 0.0
-    elif a > 1.0:
-        a = 1.0
+        # se per qualche motivo a non è un numero valido, ignoro questo punto
+        if not isinstance(a, (int, float)) or math.isnan(a):
+            return float("inf")
 
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-    return R * c
+        # clamp per evitare errori numerici (a leggermente <0 o >1)
+        if a < 0.0:
+            a = 0.0
+        elif a > 1.0:
+            a = 1.0
 
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+        d = R * c
 
-def http_get_json(url: str, timeout: int = 30) -> Dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "sicilia-traffic/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = resp.read().decode("utf-8")
-    return json.loads(data)
+        if math.isnan(d) or d < 0:
+            return float("inf")
+        return d
+    except Exception:
+        # in caso di qualunque errore, consideriamo la distanza infinita
+        return float("inf")
 
 
 def download_file(url: str, dst: pathlib.Path, timeout: int = 60) -> pathlib.Path:
@@ -1504,7 +1508,7 @@ class AnasTgma2015Provider:
                     distance_m=0.0,
                     details={
                         "error": (
-                            "Per usare questo provider installa geopandas (e dipendenze GIS) "
+                            "Per usare questo provider installa geopandas (e dipendenze GIS), "
                             "es. `pip install geopandas`."
                         ),
                         "exception": str(e),
@@ -1561,9 +1565,17 @@ class AnasTgma2015Provider:
             if geom.geom_type != "Point":
                 geom = geom.centroid
 
-            row_lat = float(geom.y)
-            row_lon = float(geom.x)
+            try:
+                row_lat = float(geom.y)
+                row_lon = float(geom.x)
+            except Exception:
+                # Geometria non valida
+                continue
+
+            # Distanza robusta: se qualcosa va storto, viene restituito inf e il punto è ignorato
             d = haversine_m(lat, lon, row_lat, row_lon)
+            if not isinstance(d, (int, float)) or math.isnan(d) or d <= 0:
+                continue
             if d > radius_m:
                 continue
 
@@ -1608,9 +1620,7 @@ class SicilyTraffic:
     def __init__(self, providers: Optional[List[TrafficProvider]] = None):
         self.providers = providers or [
             AnasTgma2015Provider(),
-            # Se in futuro vuoi riattivare i cataloghi CKAN per discovery:
-            # CkanCatalogProvider("https://www.dati.gov.it", name="dati.gov.it (CKAN)"),
-            # CkanCatalogProvider("https://dati.regione.sicilia.it", name="Regione Siciliana Open Data (CKAN)"),
+            # Se in futuro vuoi riattivare altri provider, aggiungili qui.
         ]
 
     def query(self, lat: float, lon: float, radius_m: float = 20000) -> List[TrafficEstimate]:
@@ -1631,7 +1641,7 @@ class SicilyTraffic:
                     )
                 )
 
-        # ordina: prima numerici, poi discovery/error
+        # ordina: prima numerici, poi errori/info
         def sort_key(x: TrafficEstimate):
             numeric = 0 if (x.value == x.value) else 1  # NaN != NaN
             return (numeric, x.distance_m)
@@ -1660,7 +1670,6 @@ if st.button("Calcola traffico veicolare (beta)"):
     if not results:
         st.warning("Nessun risultato trovato nel raggio selezionato.")
     else:
-        # separo risultati con valore numerico da quelli solo descrittivi/errore
         numeric_results = [r for r in results if r.value == r.value]  # NaN != NaN
 
         if not numeric_results:
@@ -1670,7 +1679,6 @@ if st.button("Calcola traffico veicolare (beta)"):
                 "oppure che manchino dati nel dataset."
             )
 
-        # Tabella riassuntiva
         rows = []
         for r in results:
             rows.append(
