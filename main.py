@@ -1373,3 +1373,98 @@ bd = pd.DataFrame({
 })
 
 st.table(bd)
+
+
+# ============================================================
+# SEZIONE 10 — Traffico veicolare: fonti pubbliche & approccio integrazione (BETA)
+# ============================================================
+st.subheader("🚗 Traffico veicolare: fonti pubbliche & approccio di integrazione (beta)")
+
+st.markdown(
+    """
+Questa sezione riassume *come* si possono ottenere (quando disponibili) dati pubblici sul traffico
+(**quante auto transitano** su una strada / punto di misura) e come integrarli in modo realistico.
+
+### Cosa esiste davvero (in Italia / Sicilia)
+- **ANAS (extraurbano)**: spesso disponibile il **TGMA / TGM** (*Traffico Giornaliero Medio*), cioè un **valore medio** (non realtime).
+- **Comuni**: alcune città pubblicano **flussi di traffico** su *sezioni di misura / sensori / spire* (a volte realtime, spesso storico).
+- **Varchi ZTL / varchi ambientali**: a volte sono pubblici *solo i layer dei varchi* (posizioni/regole), non sempre i conteggi.
+- **Cataloghi CKAN (dati.gov.it, portali regionali/comunali)**: ottimi per **scoprire dataset**, ma non garantiscono uno schema uniforme
+  per interrogare direttamente i conteggi.
+
+### Perché non esiste “un check in tutti i database” al 100%
+Non esiste uno standard nazionale unico su:
+- come rappresentare i **sensori** (id, coordinate, strada, direzione),
+- come chiamare i campi **conteggio** e **timestamp**,
+- come esporre le API (CSV statico vs API JSON vs servizi GIS).
+
+Per questo, l’approccio robusto è **a plugin/adattatori**:
+1. **Discovery (cataloghi)**: cerco dataset candidati (metadati) per parole chiave (traffico, flussi, veicoli, sensori…).
+2. **Provider specifici**: per ogni dataset “buono” scrivo un adapter che:
+   - scarica/legge il dato (CSV/JSON/GIS),
+   - trova la misura più vicina a (lat, lon) entro un raggio,
+   - restituisce un valore comparabile (es. veicoli/giorno oppure veicoli/ora).
+
+### Output atteso (best effort)
+- Se trovo un provider con numeri: restituisco una **stima** + **distanza** dal punto richiesto.
+- Se trovo solo metadati: restituisco “**dataset candidati**” (link e risorse) da trasformare poi in provider.
+
+> Nota: il dato di traffico può essere usato come **proxy di domanda** per location planning, ma va sempre
+> allineato al contesto (tipologia strada, stagionalità, turismo, ZTL, ecc.).
+"""
+)
+
+with st.expander("📦 Esempio di architettura (provider/adapters) in Python", expanded=False):
+    st.markdown(
+        """
+Sotto c’è un esempio **minimal** (solo architettura) di come strutturare un modulo che,
+dato (lat, lon), prova più fonti e restituisce la miglior stima disponibile.
+
+- `CkanCatalogProvider` = discovery (metadati)
+- `AnasTgmaProvider` = esempio di provider numerico (TGMA medio) quando lo shapefile/dataset è disponibile
+- `SicilyTraffic` = orchestratore
+"""
+    )
+    st.code(
+        """from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Protocol, Tuple
+
+@dataclass
+class TrafficEstimate:
+    value: float
+    unit: str
+    period: str
+    source: str
+    location: Tuple[float, float]
+    distance_m: float
+    details: Dict[str, Any]
+
+class TrafficProvider(Protocol):
+    name: str
+    def query(self, lat: float, lon: float, radius_m: float = 1000) -> List[TrafficEstimate]:
+        ...
+
+class SicilyTraffic:
+    def __init__(self, providers: Optional[List[TrafficProvider]] = None):
+        self.providers = providers or [
+            # AnasTgmaProvider(...),
+            # PalermoTrafficProvider(...),
+            # CataniaTrafficProvider(...),
+            # CkanCatalogProvider("https://www.dati.gov.it", ...),
+        ]
+
+    def query(self, lat: float, lon: float, radius_m: float = 20000) -> List[TrafficEstimate]:
+        out: List[TrafficEstimate] = []
+        for p in self.providers:
+            try:
+                out.extend(p.query(lat, lon, radius_m=radius_m))
+            except Exception as e:
+                out.append(TrafficEstimate(
+                    value=float("nan"), unit="(error)", period="provider failure",
+                    source=getattr(p, "name", p.__class__.__name__),
+                    location=(lat, lon), distance_m=0.0, details={"error": str(e)}
+                ))
+        return out
+""",
+        language="python"
+    )
