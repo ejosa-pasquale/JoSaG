@@ -1389,25 +1389,27 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 import pandas as pd
 import streamlit as st
 
-
 st.subheader("🚗 Sezione 10 — Analisi traffico veicolare da fonti pubbliche")
 
 st.markdown(
     """
-Questa sezione stima il **traffico veicolare** vicino a un punto geografico
-utilizzando **open data ufficiali**.
+Questa sezione combina due fonti **open data**:
 
-### Fonti utilizzate
-- **ANAS / MIT – TGMA (2015)** → traffico medio giornaliero (veicoli/giorno)
-- **Comune di Palermo – PGTU (2009)** → flussi urbani storici (best-effort)
+1) **ANAS / MIT – TGMA (2015)**  
+   - Input: **latitudine/longitudine** + **raggio**
+   - Output: **veicoli/giorno (media annua)** della stazione ANAS più vicina nel raggio.
 
-> ⚠️ I dati NON sono realtime e NON puntuali sulla singola via.  
-> Servono come **proxy strutturale** per analisi territoriali e modelli economici.
+2) **Comune di Palermo – PGTU (2009)**  
+   - Il dataset **non è georeferenziato** (niente lat/lon), quindi **non si può** usare per query per coordinate.
+   - Input: **nome strada** (ricerca testuale)
+   - Output: **flussi per fascia oraria** e per categoria veicolare (autovetture, 2 ruote, bus, ecc.).
+
+> ⚠️ Non sono dati realtime. Sono utili come **proxy** per analisi territoriali e modelli economici.
 """
 )
 
 # ------------------------------------------------------------
-# Modello dati
+# Modello dati (per risultati per coordinate)
 # ------------------------------------------------------------
 @dataclass
 class TrafficEstimate:
@@ -1427,7 +1429,7 @@ class TrafficProvider(Protocol):
 
 
 # ------------------------------------------------------------
-# Utility: distanza robusta (mai errori matematici)
+# Utility: distanza robusta
 # ------------------------------------------------------------
 def haversine_m(lat1, lon1, lat2, lon2):
     try:
@@ -1447,10 +1449,10 @@ def haversine_m(lat1, lon1, lat2, lon2):
 
 
 # ------------------------------------------------------------
-# Provider 1 — ANAS TGMA 2015
+# Provider: ANAS TGMA 2015 (numerico, per coordinate)
 # ------------------------------------------------------------
 class AnasTgma2015Provider:
-    name = "ANAS TGMA (MIT Open Data, 2015)"
+    name = "ANAS TGMA (MIT Open Data, Nov 2015)"
 
     ZIP_URL = (
         "https://dati.mit.gov.it/catalog/dataset/"
@@ -1491,13 +1493,16 @@ class AnasTgma2015Provider:
             gdf = self._load()
         except Exception as e:
             return [TrafficEstimate(
-                float("nan"), "(error)", "TGMA 2015",
-                self.name, (lat, lon), 0.0, {"error": str(e)}
+                float("nan"), "(error)", "TGMA 2015", self.name,
+                (lat, lon), 0.0, {"error": str(e)}
             )]
 
         field = next((c for c in gdf.columns if c.upper().startswith("TGM")), None)
         if not field:
-            return []
+            return [TrafficEstimate(
+                float("nan"), "(error)", "TGMA 2015", self.name,
+                (lat, lon), 0.0, {"error": "Campo TGM/TGMA non trovato nello shapefile."}
+            )]
 
         best = None
         for _, r in gdf.iterrows():
@@ -1517,119 +1522,57 @@ class AnasTgma2015Provider:
                 continue
 
             est = TrafficEstimate(
-                val, "vehicles/day", "TGMA (media annua 2015)",
-                self.name, (g.y, g.x), d, {"field": field}
+                val,
+                "vehicles/day",
+                "TGMA (media annua) - snapshot 2015",
+                self.name,
+                (g.y, g.x),
+                d,
+                {"field": field},
             )
             if best is None or d < best.distance_m:
                 best = est
 
         return [best] if best else [TrafficEstimate(
-            float("nan"), "(no data in radius)", "TGMA 2015",
-            self.name, (lat, lon), radius_m,
-            {"info": "Nessuna stazione ANAS nel raggio"}
+            float("nan"),
+            "(no data in radius)",
+            "TGMA 2015",
+            self.name,
+            (lat, lon),
+            radius_m,
+            {"info": "Nessuna stazione ANAS nel raggio selezionato."},
         )]
 
 
 # ------------------------------------------------------------
-# Provider 2 — Palermo PGTU 2009 (CSV, encoding FIX)
+# Aggregatore (solo per fonti georeferenziate)
 # ------------------------------------------------------------
-class PalermoTraffic2009Provider:
-    name = "Palermo – PGTU flussi traffico (2009)"
-
-    CSV_URL = "https://opendata.comune.palermo.it/ws.php?id=1420&fmt=csv"
-
-    def query(self, lat, lon, radius_m):
-        try:
-            df = pd.read_csv(
-                self.CSV_URL,
-                sep=None,
-                engine="python",
-                encoding="latin-1"
-            )
-        except Exception as e:
-            return [TrafficEstimate(
-                float("nan"), "(error)", "2009",
-                self.name, (lat, lon), 0.0,
-                {"error": f"Errore lettura CSV Palermo: {e}"}
-            )]
-
-        cols = {c.upper(): c for c in df.columns}
-
-        lat_col = next((cols[c] for c in cols if "LAT" in c), None)
-        lon_col = next((cols[c] for c in cols if "LON" in c or "LONG" in c), None)
-        flow_col = next(
-            (c for c in df.columns if "FLUS" in c.upper() or "VEIC" in c.upper()),
-            None
-        )
-
-        if not (lat_col and lon_col and flow_col):
-            return [TrafficEstimate(
-                float("nan"), "(dataset not geocoded)", "2009",
-                self.name, (lat, lon), radius_m,
-                {"columns": list(df.columns)}
-            )]
-
-        best = None
-        for _, r in df.iterrows():
-            try:
-                d = haversine_m(lat, lon, float(r[lat_col]), float(r[lon_col]))
-            except Exception:
-                continue
-            if d > radius_m:
-                continue
-
-            try:
-                val = float(r[flow_col])
-            except Exception:
-                continue
-
-            est = TrafficEstimate(
-                val, "vehicles/day", "PGTU Palermo 2009",
-                self.name, (r[lat_col], r[lon_col]), d,
-                {"flow_column": flow_col}
-            )
-            if best is None or d < best.distance_m:
-                best = est
-
-        return [best] if best else [TrafficEstimate(
-            float("nan"), "(no data in radius)", "2009",
-            self.name, (lat, lon), radius_m,
-            {"info": "Nessuna sezione PGTU nel raggio"}
-        )]
-
-
-# ------------------------------------------------------------
-# Aggregatore
-# ------------------------------------------------------------
-class SicilyTraffic:
+class GeoTraffic:
     def __init__(self):
-        self.providers = [
-            AnasTgma2015Provider(),
-            PalermoTraffic2009Provider(),
-        ]
+        self.providers = [AnasTgma2015Provider()]
 
     def query(self, lat, lon, radius_m):
-        out = []
+        out: List[TrafficEstimate] = []
         for p in self.providers:
             out.extend(p.query(lat, lon, radius_m))
         return out
 
 
-# ------------------------------------------------------------
-# UI Streamlit
-# ------------------------------------------------------------
-st.markdown("### 🔍 Calcolo traffico per coordinate")
+# ============================================================
+# UI — A) Query per coordinate (ANAS)
+# ============================================================
+st.markdown("### A) 📍 Traffico da coordinate (ANAS TGMA 2015)")
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    lat = st.number_input("Latitudine", value=38.115700, format="%.6f")
+    lat = st.number_input("Latitudine", value=38.115700, format="%.6f", key="t10_lat")
 with c2:
-    lon = st.number_input("Longitudine", value=13.361500, format="%.6f")
+    lon = st.number_input("Longitudine", value=13.361500, format="%.6f", key="t10_lon")
 with c3:
-    r_km = st.number_input("Raggio (km)", value=20.0, min_value=1.0)
+    r_km = st.number_input("Raggio (km)", value=20.0, min_value=1.0, max_value=200.0, key="t10_rkm")
 
-if st.button("Calcola traffico"):
-    svc = SicilyTraffic()
+if st.button("Calcola traffico ANAS (TGMA)", key="t10_run_anas"):
+    svc = GeoTraffic()
     res = svc.query(lat, lon, r_km * 1000)
 
     st.dataframe([{
@@ -1640,3 +1583,91 @@ if st.button("Calcola traffico"):
         "Distanza (m)": round(r.distance_m, 1),
         "Note": json.dumps(r.details, ensure_ascii=False)[:200],
     } for r in res], use_container_width=True)
+
+    st.caption(
+        "TGMA = Traffico Giornaliero Medio (media annua). "
+        "Il valore si riferisce alla stazione ANAS più vicina nel raggio scelto."
+    )
+
+
+# ============================================================
+# UI — B) Palermo per strada (PGTU 2009)
+# ============================================================
+st.markdown("### B) 🛣️ Palermo — Flussi per strada (PGTU 2009)")
+
+st.markdown(
+    """
+Il dataset PGTU Palermo 2009 non ha coordinate.  
+Per usarlo devi cercare per **nome strada**: ti restituisce i **conteggi per fascia oraria**.
+"""
+)
+
+PALERMO_CSV_URL = "https://opendata.comune.palermo.it/ws.php?id=1420&fmt=csv"
+
+street_query = st.text_input(
+    "Cerca strada (es. 'Viale Regione', 'Via Roma', 'Corso Calatafimi'...)",
+    value="",
+    key="t10_palermo_street"
+)
+
+colA, colB = st.columns([1, 1])
+with colA:
+    max_rows = st.number_input("Max righe da mostrare", min_value=10, max_value=5000, value=200, step=10, key="t10_palermo_max")
+with colB:
+    show_all_cols = st.checkbox("Mostra tutte le colonne", value=False, key="t10_palermo_allcols")
+
+if st.button("Cerca nel dataset Palermo (PGTU 2009)", key="t10_run_palermo"):
+    try:
+        dfp = pd.read_csv(
+            PALERMO_CSV_URL,
+            sep=None,
+            engine="python",
+            encoding="latin-1"
+        )
+    except Exception as e:
+        st.error(f"Errore nel download/lettura del CSV Palermo: {e}")
+        dfp = None
+
+    if dfp is not None:
+        # normalizzo colonne attese
+        expected_cols = [
+            "strada", "tipo flusso", "fascia oraria",
+            "autovetture", "Mezzi a 2 ruote", "mezzi commerciali",
+            "bus di linea", "bus turistici", "TOTALI", "Variaz. % risp. al 1995"
+        ]
+        missing = [c for c in expected_cols if c not in dfp.columns]
+        if missing:
+            st.warning(
+                "Attenzione: alcune colonne attese non sono presenti nel CSV. "
+                f"Mancano: {missing}. Mostro comunque le colonne disponibili."
+            )
+
+        if not street_query.strip():
+            st.info("Inserisci un nome strada per avviare la ricerca.")
+        else:
+            # filtro righe per strada
+            mask = dfp["strada"].astype(str).str.contains(street_query, case=False, na=False)
+            matches = dfp.loc[mask].copy()
+
+            if matches.empty:
+                st.warning("Nessuna riga trovata per la strada cercata.")
+            else:
+                # ordino: prima per strada poi fascia oraria
+                if "fascia oraria" in matches.columns:
+                    matches = matches.sort_values(by=["strada", "fascia oraria"], ascending=True)
+
+                st.success(f"Trovate {len(matches)} righe per la ricerca '{street_query}'.")
+                if not show_all_cols:
+                    cols_to_show = [c for c in [
+                        "strada", "tipo flusso", "fascia oraria",
+                        "TOTALI", "autovetture", "Mezzi a 2 ruote",
+                        "mezzi commerciali", "bus di linea", "bus turistici"
+                    ] if c in matches.columns]
+                    st.dataframe(matches[cols_to_show].head(int(max_rows)), use_container_width=True)
+                else:
+                    st.dataframe(matches.head(int(max_rows)), use_container_width=True)
+
+                st.caption(
+                    "Interpretazione: 'TOTALI' indica il totale veicoli nella fascia oraria riportata "
+                    "per la strada indicata (dataset storico 2009)."
+                )
