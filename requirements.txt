@@ -5,3 +5,4 @@ matplotlib
 numpy-financial
 requests
 geopy
+geopandas>=0.13
