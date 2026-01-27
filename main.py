@@ -1430,15 +1430,23 @@ class TrafficProvider(Protocol):
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Distanza in metri fra due coordinate WGS84."""
+    """Distanza in metri fra due coordinate WGS84 (versione robusta)."""
     R = 6371000.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dl = math.radians(lon2 - lon1)
 
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * (math.sin(dl / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    # 🔒 Clamp per evitare errori numerici (a leggermente <0 o >1)
+    if a < 0.0:
+        a = 0.0
+    elif a > 1.0:
+        a = 1.0
+
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
     return R * c
+
 
 
 def http_get_json(url: str, timeout: int = 30) -> Dict[str, Any]:
