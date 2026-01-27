@@ -1387,27 +1387,29 @@ import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
+import pandas as pd
+import streamlit as st
+
+
 st.subheader("🚗 Sezione 10 — Analisi traffico veicolare da fonti pubbliche")
 
 st.markdown(
     """
 Questa sezione stima il **traffico veicolare** vicino a un punto geografico
-usando **open data ufficiali**.
+utilizzando **open data ufficiali**.
 
-### Fonti utilizzate
-- **ANAS / MIT – TGMA (2015)**  
-  Traffico Giornaliero Medio su stazioni ANAS (dato numerico, veicoli/giorno).
-- **Comune di Palermo – PGTU (2009)**  
-  Flussi di traffico urbani **storici** (contesto, non numerico automatico).
+### Fonti
+- **ANAS / MIT – TGMA (2015)** → veicoli/giorno (dato numerico)
+- **Comune di Palermo – PGTU (2009)** → flussi urbani storici (best-effort)
 
-> ⚠️ I dati **non sono realtime** e servono come **proxy strutturale**
-> per analisi territoriali, confronti e modelli economici.
+> ⚠️ I dati NON sono realtime.  
+> Servono come **proxy strutturale** per analisi territoriali e modelli economici.
 """
 )
 
-# -----------------------------
+# ------------------------------------------------------------
 # Modello dati
-# -----------------------------
+# ------------------------------------------------------------
 @dataclass
 class TrafficEstimate:
     value: float
@@ -1421,15 +1423,14 @@ class TrafficEstimate:
 
 class TrafficProvider(Protocol):
     name: str
-    def query(self, lat: float, lon: float, radius_m: float = 1000) -> List[TrafficEstimate]:
+    def query(self, lat: float, lon: float, radius_m: float) -> List[TrafficEstimate]:
         ...
 
 
-# -----------------------------
-# Utility: distanza robusta
-# -----------------------------
-def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Distanza WGS84 ultra-robusta (mai errori matematici)."""
+# ------------------------------------------------------------
+# Utility distanza (robusta)
+# ------------------------------------------------------------
+def haversine_m(lat1, lon1, lat2, lon2):
     try:
         R = 6371000.0
         phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -1440,26 +1441,19 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
             math.sin(dphi / 2) ** 2
             + math.cos(phi1) * math.cos(phi2) * math.sin(dl / 2) ** 2
         )
-
-        if not isinstance(a, (int, float)) or math.isnan(a):
-            return float("inf")
-
         a = max(0.0, min(1.0, a))
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-        d = R * c
-
-        return d if d > 0 else float("inf")
+        return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
     except Exception:
         return float("inf")
 
 
-# -----------------------------
-# Provider 1: ANAS TGMA 2015
-# -----------------------------
+# ------------------------------------------------------------
+# Provider 1 — ANAS TGMA 2015
+# ------------------------------------------------------------
 class AnasTgma2015Provider:
-    name = "ANAS TGMA (MIT Open Data, Nov 2015)"
+    name = "ANAS TGMA (MIT Open Data, 2015)"
 
-    TGM_ZIP_URL = (
+    ZIP_URL = (
         "https://dati.mit.gov.it/catalog/dataset/"
         "a9b851f0-cb05-4e7e-ae43-040926a368db/"
         "resource/09935ff0-da89-4b11-afe9-9902fad9ea57/"
@@ -1467,23 +1461,23 @@ class AnasTgma2015Provider:
     )
 
     def __init__(self):
-        self.cache_dir = pathlib.Path.home() / ".traffic_cache"
-        self.data_dir = self.cache_dir / "tgm_2015"
+        self.cache = pathlib.Path.home() / ".traffic_cache"
+        self.data = self.cache / "tgm2015"
 
-    def _load_gdf(self):
+    def _load(self):
         import geopandas as gpd
 
-        self.cache_dir.mkdir(exist_ok=True)
-        zip_path = self.cache_dir / "tgm2015.zip"
+        self.cache.mkdir(exist_ok=True)
+        zip_path = self.cache / "tgm2015.zip"
 
         if not zip_path.exists():
-            urllib.request.urlretrieve(self.TGM_ZIP_URL, zip_path)
+            urllib.request.urlretrieve(self.ZIP_URL, zip_path)
 
-        if not self.data_dir.exists():
+        if not self.data.exists():
             with zipfile.ZipFile(zip_path) as z:
-                z.extractall(self.data_dir)
+                z.extractall(self.data)
 
-        shp = list(self.data_dir.rglob("*.shp"))[0]
+        shp = list(self.data.rglob("*.shp"))[0]
         gdf = gpd.read_file(shp)
 
         if gdf.crs is None:
@@ -1493,18 +1487,13 @@ class AnasTgma2015Provider:
 
         return gdf
 
-    def query(self, lat: float, lon: float, radius_m: float = 20000) -> List[TrafficEstimate]:
+    def query(self, lat, lon, radius_m):
         try:
-            gdf = self._load_gdf()
+            gdf = self._load()
         except Exception as e:
             return [TrafficEstimate(
-                value=float("nan"),
-                unit="(error)",
-                period="TGMA",
-                source=self.name,
-                location=(lat, lon),
-                distance_m=0.0,
-                details={"error": str(e)},
+                float("nan"), "(error)", "TGMA", self.name,
+                (lat, lon), 0.0, {"error": str(e)}
             )]
 
         field = next((c for c in gdf.columns if c.upper().startswith("TGM")), None)
@@ -1513,13 +1502,13 @@ class AnasTgma2015Provider:
 
         best = None
         for _, r in gdf.iterrows():
-            geom = r.geometry
-            if geom is None:
+            g = r.geometry
+            if g is None:
                 continue
-            if geom.geom_type != "Point":
-                geom = geom.centroid
+            if g.geom_type != "Point":
+                g = g.centroid
 
-            d = haversine_m(lat, lon, geom.y, geom.x)
+            d = haversine_m(lat, lon, g.y, g.x)
             if d > radius_m:
                 continue
 
@@ -1529,57 +1518,78 @@ class AnasTgma2015Provider:
                 continue
 
             est = TrafficEstimate(
-                value=val,
-                unit="vehicles/day",
-                period="TGMA (media annua)",
-                source=self.name,
-                location=(geom.y, geom.x),
-                distance_m=d,
-                details={"field": field},
+                val, "vehicles/day", "TGMA (media annua 2015)",
+                self.name, (g.y, g.x), d, {"field": field}
             )
             if best is None or d < best.distance_m:
                 best = est
 
         return [best] if best else [TrafficEstimate(
-            value=float("nan"),
-            unit="(no data in radius)",
-            period="TGMA",
-            source=self.name,
-            location=(lat, lon),
-            distance_m=radius_m,
-            details={"info": "Nessuna stazione ANAS nel raggio"},
+            float("nan"), "(no data in radius)", "TGMA", self.name,
+            (lat, lon), radius_m, {}
         )]
 
 
-# -----------------------------
-# Provider 2: Palermo storico
-# -----------------------------
+# ------------------------------------------------------------
+# Provider 2 — Palermo PGTU 2009 (best-effort)
+# ------------------------------------------------------------
 class PalermoTraffic2009Provider:
-    name = "Palermo – PGTU Flussi di traffico (2009)"
+    name = "Palermo – PGTU flussi traffico (2009)"
 
-    DATASET_URL = (
-        "https://opendata.comune.palermo.it/dataset/"
-        "piano-generale-del-traffico-urbano-flussi-di-traffico-2009"
-    )
+    CSV_URL = "https://opendata.comune.palermo.it/ws.php?id=1420&fmt=csv"
 
-    def query(self, lat: float, lon: float, radius_m: float = 5000) -> List[TrafficEstimate]:
-        return [TrafficEstimate(
-            value=float("nan"),
-            unit="(historical dataset)",
-            period="2009",
-            source=self.name,
-            location=(lat, lon),
-            distance_m=radius_m,
-            details={
-                "info": "Dataset urbano storico, non interrogabile automaticamente",
-                "url": self.DATASET_URL,
-            },
+    def query(self, lat, lon, radius_m):
+        try:
+            df = pd.read_csv(self.CSV_URL, sep=None, engine="python")
+        except Exception as e:
+            return [TrafficEstimate(
+                float("nan"), "(error)", "2009", self.name,
+                (lat, lon), 0.0, {"error": str(e)}
+            )]
+
+        cols = {c.upper(): c for c in df.columns}
+        lat_col = next((cols[c] for c in cols if "LAT" in c), None)
+        lon_col = next((cols[c] for c in cols if "LON" in c), None)
+        flow_col = next((c for c in df.columns if "FLUS" in c.upper() or "VEIC" in c.upper()), None)
+
+        if not (lat_col and lon_col and flow_col):
+            return [TrafficEstimate(
+                float("nan"), "(dataset not geocoded)", "2009", self.name,
+                (lat, lon), radius_m,
+                {"columns": list(df.columns)}
+            )]
+
+        best = None
+        for _, r in df.iterrows():
+            try:
+                d = haversine_m(lat, lon, float(r[lat_col]), float(r[lon_col]))
+            except Exception:
+                continue
+            if d > radius_m:
+                continue
+
+            try:
+                val = float(r[flow_col])
+            except Exception:
+                continue
+
+            est = TrafficEstimate(
+                val, "vehicles/day", "PGTU 2009",
+                self.name, (r[lat_col], r[lon_col]), d,
+                {"flow_column": flow_col}
+            )
+            if best is None or d < best.distance_m:
+                best = est
+
+        return [best] if best else [TrafficEstimate(
+            float("nan"), "(no data in radius)", "2009",
+            self.name, (lat, lon), radius_m, {}
         )]
 
 
-# -----------------------------
+# ------------------------------------------------------------
 # Aggregatore
-# -----------------------------
+# ------------------------------------------------------------
 class SicilyTraffic:
     def __init__(self):
         self.providers = [
@@ -1587,16 +1597,16 @@ class SicilyTraffic:
             PalermoTraffic2009Provider(),
         ]
 
-    def query(self, lat: float, lon: float, radius_m: float):
+    def query(self, lat, lon, radius_m):
         out = []
         for p in self.providers:
             out.extend(p.query(lat, lon, radius_m))
         return out
 
 
-# -----------------------------
-# UI Streamlit
-# -----------------------------
+# ------------------------------------------------------------
+# UI
+# ------------------------------------------------------------
 st.markdown("### 🔍 Calcolo traffico per coordinate")
 
 c1, c2, c3 = st.columns(3)
@@ -1611,13 +1621,11 @@ if st.button("Calcola traffico"):
     svc = SicilyTraffic()
     res = svc.query(lat, lon, r_km * 1000)
 
-    rows = [{
+    st.dataframe([{
         "Fonte": r.source,
         "Valore": r.value,
         "Unità": r.unit,
         "Periodo": r.period,
         "Distanza (m)": round(r.distance_m, 1),
         "Note": json.dumps(r.details, ensure_ascii=False)[:200],
-    } for r in res]
-
-    st.dataframe(rows, use_container_width=True)
+    } for r in res], use_container_width=True)
