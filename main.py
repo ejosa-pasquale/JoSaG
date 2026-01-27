@@ -1376,81 +1376,255 @@ st.table(bd)
 
 
 # ============================================================
-# SEZIONE 10 — Traffico veicolare: fonti pubbliche & approccio integrazione (BETA)
+# SEZIONE 10 — Traffico veicolare
 # ============================================================
-st.subheader("🚗 Traffico veicolare: fonti pubbliche & approccio di integrazione (beta)")
+# Modulo di analisi traffico veicolare basato su fonti pubbliche (beta)
+# ============================================================
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Protocol, Tuple
+import json
+import math
+import os
+import pathlib
+import urllib.parse
+import urllib.request
+import zipfile
+
+st.subheader("🚗 Sezione 10 — Analisi traffico veicolare da fonti pubbliche (beta)")
 
 st.markdown(
     """
-Questa sezione riassume *come* si possono ottenere (quando disponibili) dati pubblici sul traffico
-(**quante auto transitano** su una strada / punto di misura) e come integrarli in modo realistico.
+In questa sezione puoi inserire **latitudine** e **longitudine** e provare a stimare il
+**traffico veicolare** vicino al punto selezionato usando alcune **banche dati pubbliche**:
 
-### Cosa esiste davvero (in Italia / Sicilia)
-- **ANAS (extraurbano)**: spesso disponibile il **TGMA / TGM** (*Traffico Giornaliero Medio*), cioè un **valore medio** (non realtime).
-- **Comuni**: alcune città pubblicano **flussi di traffico** su *sezioni di misura / sensori / spire* (a volte realtime, spesso storico).
-- **Varchi ZTL / varchi ambientali**: a volte sono pubblici *solo i layer dei varchi* (posizioni/regole), non sempre i conteggi.
-- **Cataloghi CKAN (dati.gov.it, portali regionali/comunali)**: ottimi per **scoprire dataset**, ma non garantiscono uno schema uniforme
-  per interrogare direttamente i conteggi.
+- **ANAS / MIT – Traffico Giornaliero Medio (TGMA)**: valore medio di veicoli/giorno su stazioni di misura,
+  utile su strade extraurbane.
+- **Cataloghi open data (CKAN: dati.gov.it, Regione Siciliana)**: usati in questa versione
+  solo per *scoprire* dataset candidati (non restituiscono un numero diretto, ma link ai dataset).
 
-### Perché non esiste “un check in tutti i database” al 100%
-Non esiste uno standard nazionale unico su:
-- come rappresentare i **sensori** (id, coordinate, strada, direzione),
-- come chiamare i campi **conteggio** e **timestamp**,
-- come esporre le API (CSV statico vs API JSON vs servizi GIS).
-
-Per questo, l’approccio robusto è **a plugin/adattatori**:
-1. **Discovery (cataloghi)**: cerco dataset candidati (metadati) per parole chiave (traffico, flussi, veicoli, sensori…).
-2. **Provider specifici**: per ogni dataset “buono” scrivo un adapter che:
-   - scarica/legge il dato (CSV/JSON/GIS),
-   - trova la misura più vicina a (lat, lon) entro un raggio,
-   - restituisce un valore comparabile (es. veicoli/giorno oppure veicoli/ora).
-
-### Output atteso (best effort)
-- Se trovo un provider con numeri: restituisco una **stima** + **distanza** dal punto richiesto.
-- Se trovo solo metadati: restituisco “**dataset candidati**” (link e risorse) da trasformare poi in provider.
-
-> Nota: il dato di traffico può essere usato come **proxy di domanda** per location planning, ma va sempre
-> allineato al contesto (tipologia strada, stagionalità, turismo, ZTL, ecc.).
+> ⚠️ Si tratta di un modulo *sperimentale*: il risultato può essere **assente** o **non aggiornato**
+> a seconda della copertura sensori/dataset e dell'anno di rilevazione.
 """
 )
 
-with st.expander("📦 Esempio di architettura (provider/adapters) in Python", expanded=False):
-    st.markdown(
-        """
-Sotto c’è un esempio **minimal** (solo architettura) di come strutturare un modulo che,
-dato (lat, lon), prova più fonti e restituisce la miglior stima disponibile.
-
-- `CkanCatalogProvider` = discovery (metadati)
-- `AnasTgmaProvider` = esempio di provider numerico (TGMA medio) quando lo shapefile/dataset è disponibile
-- `SicilyTraffic` = orchestratore
-"""
-    )
-    st.code(
-        """from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple
-
+# -----------------------------
+# Modello dati & utilities
+# -----------------------------
 @dataclass
 class TrafficEstimate:
     value: float
-    unit: str
-    period: str
-    source: str
-    location: Tuple[float, float]
+    unit: str                 # es. "vehicles/day"
+    period: str               # es. "TGMA (mean annual daily traffic)"
+    source: str               # es. "ANAS/MIT Open Data"
+    location: Tuple[float, float]  # (lat, lon) del punto di misura
     distance_m: float
     details: Dict[str, Any]
 
+
 class TrafficProvider(Protocol):
     name: str
+
     def query(self, lat: float, lon: float, radius_m: float = 1000) -> List[TrafficEstimate]:
         ...
 
+
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distanza in metri fra due coordinate WGS84."""
+    R = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * (math.sin(dl / 2) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+def http_get_json(url: str, timeout: int = 30) -> Dict[str, Any]:
+    req = urllib.request.Request(url, headers={"User-Agent": "sicilia-traffic/0.1"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read().decode("utf-8")
+    return json.loads(data)
+
+
+def download_file(url: str, dst: pathlib.Path, timeout: int = 60) -> pathlib.Path:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() and dst.stat().st_size > 0:
+        return dst
+    req = urllib.request.Request(url, headers={"User-Agent": "sicilia-traffic/0.1"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dst, "wb") as f:
+        f.write(resp.read())
+    return dst
+
+
+# -----------------------------
+# Provider: CKAN catalog (solo discovery metadati)
+# -----------------------------
+class CkanCatalogProvider:
+    """Cerca dataset relativi a traffico/flussi nei cataloghi CKAN (es. dati.gov.it)."""
+
+    def __init__(self, base_url: str, name: str, keywords: Optional[List[str]] = None):
+        self.base_url = base_url.rstrip("/")
+        self.name = name
+        self.keywords = keywords or [
+            "traffico", "flussi", "conteggi", "veicoli", "spire", "sensori", "mobilità"
+        ]
+
+    def _package_search(self, q: str, rows: int = 20) -> Dict[str, Any]:
+        endpoint = f"{self.base_url}/api/3/action/package_search"
+        params = {"q": q, "rows": str(rows)}
+        url = endpoint + "?" + urllib.parse.urlencode(params)
+        return http_get_json(url)
+
+    def query(self, lat: float, lon: float, radius_m: float = 1000) -> List[TrafficEstimate]:
+        results: List[TrafficEstimate] = []
+        q = " OR ".join(self.keywords)
+        try:
+            data = self._package_search(q=q, rows=20)
+        except Exception as e:
+            return [
+                TrafficEstimate(
+                    value=float("nan"),
+                    unit="(error)",
+                    period="catalog discovery",
+                    source=self.name,
+                    location=(lat, lon),
+                    distance_m=0.0,
+                    details={"error": str(e)},
+                )
+            ]
+
+        if not data.get("success"):
+            return results
+
+        for pkg in data["result"].get("results", []):
+            title = pkg.get("title") or pkg.get("name")
+            url = f"{self.base_url}/dataset/{pkg.get('name')}"
+            results.append(
+                TrafficEstimate(
+                    value=float("nan"),
+                    unit="(dataset)",
+                    period="catalog discovery (no direct count)",
+                    source=self.name,
+                    location=(lat, lon),
+                    distance_m=0.0,
+                    details={
+                        "dataset_title": title,
+                        "dataset_url": url,
+                        "notes": (pkg.get("notes") or "")[:300],
+                    },
+                )
+            )
+        return results
+
+
+# -----------------------------
+# Provider: ANAS TGMA (MIT Open Data shapefile, Nov 2015)
+# -----------------------------
+class AnasTgma2015Provider:
+    name = "ANAS TGMA (MIT Open Data, Nov 2015)"
+
+    TGM_ZIP_URL = (
+        "https://dati.mit.gov.it/catalog/dataset/a9b851f0-cb05-4e7e-ae43-040926a368db/"
+        "resource/09935ff0-da89-4b11-afe9-9902fad9ea57/download/tgm_nov2015.zip"
+    )
+
+    def __init__(self, cache_dir: Optional[str] = None):
+        self.cache_dir = pathlib.Path(cache_dir or os.path.join(pathlib.Path.home(), ".sicilia_traffic_cache"))
+        self._extracted_dir = self.cache_dir / "tgm_nov2015"
+
+    def _ensure_data(self) -> pathlib.Path:
+        zip_path = self.cache_dir / "tgm_nov2015.zip"
+        download_file(self.TGM_ZIP_URL, zip_path)
+        if not self._extracted_dir.exists():
+            self._extracted_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(self._extracted_dir)
+        return self._extracted_dir
+
+    def query(self, lat: float, lon: float, radius_m: float = 20000) -> List[TrafficEstimate]:
+        try:
+            import geopandas as gpd  # type: ignore
+        except ImportError as e:
+            # Non blocchiamo l'app: restituiamo un "errore" descrittivo
+            return [
+                TrafficEstimate(
+                    value=float("nan"),
+                    unit="(missing dependency)",
+                    period="TGMA (mean annual daily traffic)",
+                    source=self.name,
+                    location=(lat, lon),
+                    distance_m=0.0,
+                    details={
+                        "error": "Per usare questo provider installa geopandas + shapely + fiona (pip install geopandas).",
+                        "exception": str(e),
+                    },
+                )
+            ]
+
+        data_dir = self._ensure_data()
+
+        shp_files = list(data_dir.rglob("*.shp"))
+        if not shp_files:
+            return []
+
+        gdf = gpd.read_file(shp_files[0])
+
+        candidates = ["TGMA", "TGM", "TRAFFICO", "TRAFF_GM", "TGM_NOV15"]
+        tgm_field = next((c for c in candidates if c in gdf.columns), None)
+        if tgm_field is None:
+            return []
+
+        # coordinate in WGS84
+        if gdf.crs is None:
+            gdf = gdf.set_crs("EPSG:4326", allow_override=True)
+        elif str(gdf.crs).lower() not in ("epsg:4326", "wgs84"):
+            gdf = gdf.to_crs("EPSG:4326")
+
+        best: Optional[TrafficEstimate] = None
+        for _, row in gdf.iterrows():
+            geom = row.geometry
+            if geom is None:
+                continue
+            if geom.geom_type != "Point":
+                geom = geom.centroid
+
+            row_lat = float(geom.y)
+            row_lon = float(geom.x)
+            d = haversine_m(lat, lon, row_lat, row_lon)
+            if d > radius_m:
+                continue
+
+            try:
+                val = float(row[tgm_field])
+            except Exception:
+                continue
+
+            est = TrafficEstimate(
+                value=val,
+                unit="vehicles/day",
+                period="TGMA (mean annual daily traffic) - Nov 2015 snapshot",
+                source=self.name,
+                location=(row_lat, row_lon),
+                distance_m=d,
+                details={"field": tgm_field},
+            )
+            if best is None or est.distance_m < best.distance_m:
+                best = est
+
+        return [best] if best else []
+
+
+# -----------------------------
+# Aggregatore
+# -----------------------------
 class SicilyTraffic:
     def __init__(self, providers: Optional[List[TrafficProvider]] = None):
         self.providers = providers or [
-            # AnasTgmaProvider(...),
-            # PalermoTrafficProvider(...),
-            # CataniaTrafficProvider(...),
-            # CkanCatalogProvider("https://www.dati.gov.it", ...),
+            AnasTgma2015Provider(),
+            CkanCatalogProvider("https://www.dati.gov.it", name="dati.gov.it (CKAN)"),
+            CkanCatalogProvider("https://dati.regione.sicilia.it", name="Regione Siciliana Open Data (CKAN)"),
         ]
 
     def query(self, lat: float, lon: float, radius_m: float = 20000) -> List[TrafficEstimate]:
@@ -1459,12 +1633,63 @@ class SicilyTraffic:
             try:
                 out.extend(p.query(lat, lon, radius_m=radius_m))
             except Exception as e:
-                out.append(TrafficEstimate(
-                    value=float("nan"), unit="(error)", period="provider failure",
-                    source=getattr(p, "name", p.__class__.__name__),
-                    location=(lat, lon), distance_m=0.0, details={"error": str(e)}
-                ))
-        return out
-""",
-        language="python"
-    )
+                out.append(
+                    TrafficEstimate(
+                        value=float("nan"),
+                        unit="(error)",
+                        period="provider failure",
+                        source=getattr(p, "name", p.__class__.__name__),
+                        location=(lat, lon),
+                        distance_m=0.0,
+                        details={"error": str(e)},
+                    )
+                )
+        # ordina: prima numerici, poi discovery/error
+        def sort_key(x: TrafficEstimate):
+            numeric = 0 if (x.value == x.value) else 1  # NaN != NaN
+            return (numeric, x.distance_m)
+
+        return sorted(out, key=sort_key)
+
+
+# -----------------------------
+# UI Streamlit per la query traffico
+# -----------------------------
+st.markdown("### 🔍 Query traffico per coordinate")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    lat_input = st.number_input("Latitudine", format="%.6f", value=37.502000)
+with col2:
+    lon_input = st.number_input("Longitudine", format="%.6f", value=15.087000)
+with col3:
+    radius_km = st.number_input("Raggio ricerca (km)", min_value=1.0, max_value=100.0, value=20.0)
+
+if st.button("Calcola traffico veicolare (beta)"):
+    with st.spinner("Interrogo le fonti pubbliche (ANAS / cataloghi open data)..."):
+        svc = SicilyTraffic()
+        results = svc.query(lat_input, lon_input, radius_m=radius_km * 1000)
+
+    if not results:
+        st.warning("Nessun risultato trovato nel raggio selezionato.")
+    else:
+        # Tabella riassuntiva
+        rows = []
+        for r in results:
+            rows.append(
+                {
+                    "Fonte": r.source,
+                    "Valore": r.value,
+                    "Unità": r.unit,
+                    "Periodo": r.period,
+                    "Distanza (m)": round(r.distance_m, 1),
+                    "Note/dettagli": json.dumps(r.details, ensure_ascii=False)[:300],
+                }
+            )
+        st.dataframe(rows, use_container_width=True)
+
+        st.caption(
+            "Le misure numeriche (es. veicoli/giorno) derivano in questa versione dal dataset "
+            "ANAS/MIT sul Traffico Giornaliero Medio (TGMA), dove presente. "
+            "Gli altri record mostrano solo dataset/metadati scoperti nei cataloghi CKAN."
+        )
